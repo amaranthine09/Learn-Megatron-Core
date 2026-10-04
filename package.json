@@ -1,6 +1,7 @@
 {
   "name": "learn-megatron-core",
   "version": "1.0.0",
+  "type": "module",
   "description": "Megatron Core Architecture Manual & Distributed Systems Specification",
   "scripts": {
     "docs:dev": "vitepress dev docs",
