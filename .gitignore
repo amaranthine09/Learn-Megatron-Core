@@ -44,3 +44,8 @@ ENV/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Node / VitePress
+node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
