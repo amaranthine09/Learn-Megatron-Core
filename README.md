@@ -111,3 +111,9 @@ torchrun --nproc_per_node=2 demo_megatron.py
 1. **[arXiv:1909.08053](https://arxiv.org/abs/1909.08053)** — Megatron-LM v1: Column/Row parallel, vocab parallel
 2. **[arXiv:2104.04473](https://arxiv.org/abs/2104.04473)** — Megatron-LM v2: Pipeline parallelism, 3D parallelism, 1F1B schedule
 3. **[arXiv:2205.05198](https://arxiv.org/abs/2205.05198)** — Megatron-LM v3: Sequence parallelism, selective activation recomputation
+
+---
+
+## 📄 License
+
+This project and its documentation are open-source and licensed under the [Apache License 2.0](LICENSE).
