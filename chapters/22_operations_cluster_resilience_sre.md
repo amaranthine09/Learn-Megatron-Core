@@ -123,99 +123,88 @@ Megatron Core uses **Non-Blocking Asynchronous Checkpointing**:
 
 ---
 
-## 6. Runnable Reference Implementation: Elastic Resilience Harness
+## 6. Megatron-Core Checkpoint & Signal Handling Patterns
 
-Below is a self-contained Python script simulating elastic fault recovery, signal trapping, and state reloading:
+### 6.1 SIGTERM Handler Pattern (production torchrun)
+
+In production Megatron runs, a SIGTERM handler is registered to flush an emergency checkpoint before the process is preempted:
 
 ```python
-import time
-import os
+# megatron/training/training.py (signal handling pattern)
+
 import signal
 import torch
-import torch.nn as nn
 
-class ElasticResilienceHarness:
+def save_checkpoint_and_time(iteration, model, optimizer, opt_param_scheduler, ...):
     """
-    Simulates production elastic training loop with emergency checkpointing,
-    simulated hardware heartbeat checks, and signal handling.
+    Called by SIGTERM handler and scheduled checkpoint intervals.
+    Saves asynchronously to avoid blocking GPU compute.
     """
-    def __init__(self, checkpoint_path: str = "/tmp/emergency_ckpt.pt"):
-        self.checkpoint_path = checkpoint_path
-        self.step = 0
-        self.shutdown_requested = False
+    from megatron.core import dist_checkpointing
 
-        # Register signals
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+    sharded_state_dict = {
+        "model":     model.sharded_state_dict(prefix=''),
+        "optimizer": optimizer.sharded_state_dict(model_sharded_state_dict=model.sharded_state_dict()),
+    }
 
-    def _signal_handler(self, signum, frame):
-        print(f"\n[ALERT] Caught signal {signum}. Initiating emergency state preservation...")
-        self.shutdown_requested = True
+    dist_checkpointing.save(
+        sharded_state_dict=sharded_state_dict,
+        checkpoint_dir=f"{args.save}/iter_{iteration:07d}",
+        sharded_strategy=('zarr', 1),      # Parallel write to Lustre / S3
+        async_sharded_save=True,           # Returns immediately; GPU resumes
+    )
 
-    def save_checkpoint(self, model: nn.Module, optimizer: torch.optim.Optimizer):
-        state = {
-            "step": self.step,
-            "model_state": model.state_dict(),
-            "optimizer_state": optimizer.state_dict(),
-        }
-        torch.save(state, self.checkpoint_path)
-        print(f"[RECOVERY] Checkpoint saved successfully at step {self.step} -> {self.checkpoint_path}")
-
-    def load_checkpoint(self, model: nn.Module, optimizer: torch.optim.Optimizer) -> int:
-        if os.path.exists(self.checkpoint_path):
-            state = torch.load(self.checkpoint_path)
-            model.load_state_dict(state["model_state"])
-            optimizer.load_state_dict(state["optimizer_state"])
-            self.step = state["step"]
-            print(f"[RECOVERY] Successfully resumed training from step {self.step}!")
-            return self.step
-        return 0
-
-    def run_training_simulation(self, model: nn.Module, optimizer: torch.optim.Optimizer, max_steps: int = 5):
-        print("[TRAINING] Starting resilient training simulation...")
-        for _ in range(self.step, max_steps):
-            self.step += 1
-            # Simulate forward + backward + step
-            x = torch.randn(4, 16)
-            loss = model(x).sum()
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-
-            print(f"  Step {self.step:02d} complete | Loss: {loss.item():.4f}")
-
-            # Check for simulated preemption
-            if self.shutdown_requested or self.step == 3:
-                print(f"[SIMULATED PREEMPTION] Triggering snapshot at step {self.step}...")
-                self.save_checkpoint(model, optimizer)
-                if self.shutdown_requested:
-                    break
-
-
-if __name__ == '__main__':
-    print("=" * 65)
-    print("  MEGATRON CLUSTER FAULT TOLERANCE VERIFICATION")
-    print("=" * 65)
-
-    ckpt_file = "/tmp/megatron_fault_tolerant.pt"
-    dummy_model = nn.Linear(16, 4)
-    dummy_opt = torch.optim.Adam(dummy_model.parameters(), lr=1e-3)
-
-    # 1. Run simulation until preemption snapshot
-    harness = ElasticResilienceHarness(ckpt_file)
-    harness.run_training_simulation(dummy_model, dummy_opt, max_steps=3)
-
-    # 2. Simulate cluster node replacement and resume
-    print("\n[CLUSTER SIMULATION] New worker node spawned. Re-attaching to storage...")
-    new_model = nn.Linear(16, 4)
-    new_opt = torch.optim.Adam(new_model.parameters(), lr=1e-3)
-    recovery_harness = ElasticResilienceHarness(ckpt_file)
-    resumed_step = recovery_harness.load_checkpoint(new_model, new_opt)
-
-    assert resumed_step == 3, f"Expected resumed step 3, got {resumed_step}"
-    print(f"✅ Verified Seamless State Resumption from Step {resumed_step}!")
-    print("=" * 65)
-
-    if os.path.exists(ckpt_file):
-        os.remove(ckpt_file)
+# Register handler
+signal.signal(signal.SIGTERM, lambda *_: save_checkpoint_and_time(iteration, ...))
 ```
+
+---
+
+### 6.2 Distributed Checkpoint Load & Resharding
+
+```python
+from megatron.core import dist_checkpointing
+
+# Load checkpoint — topology may differ from save time (TP/PP can change)
+sharded_state_dict = {
+    "model":     model.sharded_state_dict(prefix=''),
+    "optimizer": optimizer.sharded_state_dict(...),
+}
+
+state_dict = dist_checkpointing.load(
+    sharded_state_dict=sharded_state_dict,
+    checkpoint_dir="/checkpoints/iter_0100000",
+    sharded_strategy=('zarr', 1),
+    validate_access_integrity=True,    # Verifies no shard is missing
+)
+
+model.load_state_dict(state_dict["model"])
+optimizer.load_state_dict(state_dict["optimizer"])
+```
+
+> [!NOTE]
+> `dist_checkpointing.load` dynamically recalculates slice intersections between the saved topology (e.g., TP=8, PP=4) and the current topology (e.g., TP=4, PP=2). No manual resharding is needed — this is the key advantage over raw `torch.save`/`torch.load`.
+
+---
+
+### 6.3 torchrun Elastic Launch Command
+
+```bash
+torchrun \
+  --nnodes=8 \
+  --nproc_per_node=8 \
+  --max-restarts=3 \
+  --rdzv_backend=c10d \
+  --rdzv_endpoint=$MASTER_ADDR:29500 \
+  pretrain_gpt.py \
+  --num-layers 96 \
+  --hidden-size 12288 \
+  --tensor-model-parallel-size 8 \
+  --pipeline-model-parallel-size 4 \
+  --save /checkpoints/gpt4-175b \
+  --load /checkpoints/gpt4-175b \
+  --save-interval 1000
+```
+
+`--max-restarts=3` allows torchrun to respawn the entire process group up to 3 times on node failure, automatically reloading from the last checkpoint via `--load`.
+

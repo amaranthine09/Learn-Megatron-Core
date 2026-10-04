@@ -31,22 +31,19 @@ Starting in 2023, NVIDIA completely refactored the system into **Megatron Core (
 In M-Core, a Transformer layer is not a fixed monolithic class. It is constructed declaratively from a **`TransformerConfig`** and a **`ModuleSpec`**:
 
 ```python
-"""
-Megatron Core Declarative Layer Specification and Configuration
-Demonstrates the real megatron.core.transformer APIs for composing TP, SP, and TE layers.
-"""
 import torch
-from dataclasses import dataclass
-from typing import Optional
-
-# ── 1. The Real Megatron Core TransformerConfig API ──
-# from megatron.core.transformer.transformer_config import TransformerConfig
-#
-# A single centralized configuration object that defines model dimensions,
-# precision, and every single parallelism strategy across the 5D grid:
-
 from megatron.core.transformer.transformer_config import TransformerConfig
+from megatron.core.transformer.spec_utils import ModuleSpec
+from megatron.core.transformer.custom_layers.transformer_engine import (
+    TELinear, TEDotProductAttention, TENorm
+)
+from megatron.core.tensor_parallel import ColumnParallelLinear, RowParallelLinear
+from megatron.core.transformer.attention import SelfAttention, SelfAttentionSubmodules
+from megatron.core.transformer.dot_product_attention import DotProductAttention
+from megatron.core.transformer.mlp import MLP, MLPSubmodules
+from megatron.core.transformer.transformer_layer import TransformerLayer, TransformerLayerSubmodules
 
+# 1. Centralized TransformerConfig across the 5D grid
 config = TransformerConfig(
     # Model Geometry
     num_layers=32,
@@ -68,25 +65,14 @@ config = TransformerConfig(
     pipeline_dtype=torch.bfloat16,
     
     # Activation Memory Management
-    recompute_granularity='selective', # Selective activation recomputation ([Sequence Parallelism](/sequence-parallelism/))
+    recompute_granularity='selective', # Selective activation recomputation
     recompute_method='uniform',
     
     # Performance & Comm Overlap
     tp_comm_overlap=True,            # Micro-tiled Comm-Compute GEMM overlap
 )
 
-
-# ── 2. Declarative Module Specifications (ModuleSpec) ──
-# from megatron.core.transformer.spec_utils import ModuleSpec
-# from megatron.core.transformer.custom_layers.transformer_engine import (
-#     TELinear, TEDotProductAttention, TENorm
-# )
-# from megatron.core.tensor_parallel import ColumnParallelLinear, RowParallelLinear
-# from megatron.core.transformer.attention import SelfAttention, SelfAttentionSubmodules
-# from megatron.core.transformer.mlp import MLP, MLPSubmodules
-# from megatron.core.transformer.transformer_layer import TransformerLayer, TransformerLayerSubmodules
-
-# Option A: Standard PyTorch Native Spec (Runs with standard torch ops)
+# 2. Option A: Standard PyTorch Native Spec (Runs with standard torch ops)
 native_layer_spec = ModuleSpec(
     module=TransformerLayer,
     submodules=TransformerLayerSubmodules(
@@ -110,7 +96,7 @@ native_layer_spec = ModuleSpec(
     ),
 )
 
-# Option B: NVIDIA Transformer Engine (TE) Spec (Hardware-Fused FP8 kernels)
+# 3. Option B: NVIDIA Transformer Engine (TE) Spec (Hardware-Fused FP8 kernels)
 te_layer_spec = ModuleSpec(
     module=TransformerLayer,
     submodules=TransformerLayerSubmodules(
@@ -135,8 +121,8 @@ te_layer_spec = ModuleSpec(
 )
 
 # Building a layer from spec:
-# layer = TransformerLayer(config=config, submodules=te_layer_spec.submodules)
-# hidden_states = layer(hidden_states, attention_mask=causal_mask)
+layer = TransformerLayer(config=config, submodules=te_layer_spec.submodules)
+hidden_states = layer(hidden_states, attention_mask=causal_mask)
 ```
 
 This declarative decoupling is what makes Megatron Core radically superior to legacy Megatron-LM: you can switch from native PyTorch debugging to NVIDIA Hopper/Blackwell hardware-fused FP8 kernels with **zero code modifications to the Transformer block logic**.
@@ -177,83 +163,22 @@ In Megatron Core, large GEMMs are split along the sequence or batch dimension in
 **Observable Result**: Communication latency is almost completely hidden behind computation, achieving **$>90\%$ of theoretical peak GPU throughput (MFU)**!
 
 ```python
-"""
-Communication-Computation Overlap Implementation with Dual CUDA Streams.
-Demonstrates the exact micro-tiling pipeline used in Megatron Core and Transformer Engine.
-"""
-import torch
-import torch.distributed as dist
+from megatron.core.transformer.transformer_config import TransformerConfig
 
-class PipelinedRowParallelLinearWithOverlap(torch.nn.Module):
-    """
-    Splits the Row-Parallel GEMM + All-Reduce into K micro-tiles.
-    Overlaps GEMM(Tile k) on compute_stream with AllReduce(Tile k-1) on comm_stream.
-    """
-    def __init__(self, in_features_per_partition: int, out_features: int, num_tiles: int = 2):
-        super().__init__()
-        self.in_features = in_features_per_partition
-        self.out_features = out_features
-        self.num_tiles = num_tiles
-        self.weight = torch.nn.Parameter(
-            torch.empty(out_features, in_features_per_partition)
-        )
-        torch.nn.init.xavier_normal_(self.weight)
-        
-        # In real GPU execution, we create dedicated CUDA streams:
-        # self.compute_stream = torch.cuda.current_stream()
-        # self.comm_stream    = torch.cuda.Stream()
+# In Megatron Core, TP comm-compute overlap is enabled declaratively:
+config = TransformerConfig(
+    tensor_model_parallel_size=8,
+    sequence_parallel=True,
+    tp_comm_overlap=True,                # Enables micro-tiled comm-compute overlap
+)
 
-    def forward(self, x: torch.Tensor, group: Optional[dist.ProcessGroup] = None) -> torch.Tensor:
-        """
-        x: [Batch, Seq_len, in_features_per_partition]
-        Splits sequence dimension into `num_tiles` chunks.
-        """
-        # Split along sequence dimension into micro-tiles
-        x_tiles = list(torch.chunk(x, chunks=self.num_tiles, dim=1))
-        gemm_outputs = []
-        comm_work_handles = []
-
-        is_cuda = x.is_cuda and torch.cuda.is_available()
-        compute_stream = torch.cuda.current_stream() if is_cuda else None
-        comm_stream = torch.cuda.Stream() if is_cuda else None
-
-        for k in range(self.num_tiles):
-            # 1. Compute GEMM for Tile k on the Compute Stream
-            # local_tile: [B, S/k, Out]
-            local_tile = torch.nn.functional.linear(x_tiles[k], self.weight)
-            gemm_outputs.append(local_tile)
-
-            if is_cuda and comm_stream is not None:
-                # Synchronize: comm_stream must wait for Tile k GEMM to finish
-                comm_stream.wait_stream(compute_stream)
-                
-                # 2. Launch non-blocking All-Reduce for Tile k on Comm Stream
-                with torch.cuda.stream(comm_stream):
-                    work = dist.all_reduce(local_tile, group=group, async_op=True)
-                    comm_work_handles.append(work)
-            else:
-                # CPU / Gloo fallback: synchronous or standard dist
-                if dist.is_initialized():
-                    dist.all_reduce(local_tile, group=group)
-
-        # 3. Synchronize streams before passing output to downstream layers
-        if is_cuda and comm_stream is not None:
-            # Wait for all async collective handles
-            for work in comm_work_handles:
-                work.wait()
-            # Main compute stream waits for all communication to complete
-            compute_stream.wait_stream(comm_stream)
-
-        # Concatenate the communicated tiles along sequence dimension
-        return torch.cat(gemm_outputs, dim=1)
-
-
-# ── In Megatron Core Production ──
-# Megatron Core enables this transparently when using TransformerEngine specs:
-# config.tp_comm_overlap = True
-# 
-# Transformer Engine internally partitions the GEMM into CUTLASS warp-specialized
-# tiles and overlaps them directly with NCCL ring/NVLS collectives at the C++/CUDA kernel level!
+# Under the hood, Transformer Engine and Megatron Core register custom user buffers
+# and leverage dedicated CUDA communication streams:
+# 1. In ColumnParallelLinear: Overlaps input All-Gather with GEMM chunk computation
+# 2. In RowParallelLinear: Overlaps GEMM chunk computation with output Reduce-Scatter
+#
+# Collectives execute in parallel with CUTLASS warp-specialized GEMM tiles at the
+# CUDA kernel level, eliminating communication latency overhead.
 ```
 
 ---

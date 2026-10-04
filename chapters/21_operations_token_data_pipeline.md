@@ -98,175 +98,60 @@ The FlashAttention CUDA kernel uses `cu_seqlens` to reset its softmax accumulato
 
 ---
 
-## 6. Runnable Reference Implementation: Scaled Data Pipeline
+## 6. Megatron-Core Data Pipeline API Reference
 
-Below is a self-contained, runnable Python implementation demonstrating:
-1. Binary indexed dataset creation and memory-mapped reader (`MMapIndexedDataset`).
-2. Virtual Blended Dataset with deterministic weighted sampling.
-3. Sequence Packing with `cu_seqlens` calculation.
+The production data pipeline classes live in `megatron/core/datasets/`:
 
 ```python
-import os
-import struct
-import math
-import numpy as np
-import torch
-from typing import List, Tuple
+# megatron/core/datasets/gpt_dataset.py
+from megatron.core.datasets.gpt_dataset import GPTDataset, GPTDatasetConfig
 
-class MMapIndexedDatasetBuilder:
-    """
-    Builds paired binary indexed dataset files (.bin and .idx) offline.
-    """
-    def __init__(self, bin_path: str, idx_path: str, dtype=np.uint16):
-        self.bin_file = open(bin_path, 'wb')
-        self.idx_file = open(idx_path, 'wb')
-        self.dtype = dtype
-        self.doc_offsets = [0]
-        self.doc_lengths = []
-        self.total_tokens = 0
+config = GPTDatasetConfig(
+    is_built_on_rank=lambda: True,
+    random_seed=42,
+    sequence_length=4096,
+    blend=[("/data/pile/train.bin", 0.7), ("/data/books/train.bin", 0.3)],
+    split="949,50,1",                   # train/val/test split ratios
+    tokenizer=tokenizer,
+    reset_position_ids=True,            # Pack with position ID reset
+    reset_attention_mask=True,          # Enforce cu_seqlens document boundaries
+    eod_mask_loss=True,                 # Mask loss on EOD tokens
+)
 
-    def add_document(self, token_ids: List[int]):
-        arr = np.array(token_ids, dtype=self.dtype)
-        self.bin_file.write(arr.tobytes())
-        numel = len(token_ids)
-        self.total_tokens += numel
-        self.doc_lengths.append(numel)
-        self.doc_offsets.append(self.total_tokens)
-
-    def finalize(self):
-        self.bin_file.close()
-        # Write index header: magic (8B), version (8B), num_docs (8B), num_tokens (8B)
-        header = struct.pack('<QQQQ', 0x4D45474154524F4E, 1, len(self.doc_lengths), self.total_tokens)
-        self.idx_file.write(header)
-        # Write doc offsets (int64) and doc lengths (int32)
-        np.array(self.doc_offsets[:-1], dtype=np.int64).tofile(self.idx_file)
-        np.array(self.doc_lengths, dtype=np.int32).tofile(self.idx_file)
-        self.idx_file.close()
-
-
-class MMapIndexedDataset:
-    """
-    Memory-mapped constant-time reader for large token corpora.
-    Zero-copy read via OS mmap.
-    """
-    def __init__(self, bin_path: str, idx_path: str, dtype=np.uint16):
-        self.bin_path = bin_path
-        self.idx_path = idx_path
-        self.dtype = dtype
-
-        with open(idx_path, 'rb') as f:
-            header = f.read(32)
-            magic, version, self.num_docs, self.total_tokens = struct.unpack('<QQQQ', header)
-            self.doc_offsets = np.fromfile(f, dtype=np.int64, count=self.num_docs)
-            self.doc_lengths = np.fromfile(f, dtype=np.int32, count=self.num_docs)
-
-        # Memory map the binary file (read-only, shared across workers)
-        self.bin_mmap = np.memmap(bin_path, dtype=self.dtype, mode='r')
-
-    def get_document(self, doc_idx: int) -> np.ndarray:
-        offset = self.doc_offsets[doc_idx]
-        length = self.doc_lengths[doc_idx]
-        return self.bin_mmap[offset : offset + length]
-
-    def __len__(self):
-        return self.num_docs
-
-
-class VirtualBlendedDataset:
-    """
-    Virtually blends multiple MMapIndexedDatasets according to sampling weights
-    without copying or rewriting underlying binary files.
-    """
-    def __init__(self, datasets: List[MMapIndexedDataset], weights: List[float], total_samples: int = 1000):
-        self.datasets = datasets
-        norm_weights = np.array(weights) / sum(weights)
-        self.weights = norm_weights
-        self.total_samples = total_samples
-        
-        # Build deterministic global index mapping
-        rng = np.random.RandomState(42)
-        self.dataset_assignments = rng.choice(len(datasets), size=total_samples, p=norm_weights)
-        self.sample_indices = [
-            rng.randint(0, len(datasets[ds_idx])) for ds_idx in self.dataset_assignments
-        ]
-
-    def __getitem__(self, idx: int) -> np.ndarray:
-        ds_idx = self.dataset_assignments[idx]
-        sample_idx = self.sample_indices[idx]
-        return self.datasets[ds_idx].get_document(sample_idx)
-
-    def __len__(self):
-        return self.total_samples
-
-
-class SequencePacker:
-    """
-    Packs variable-length sequences into fixed windows of max_seq_len
-    and generates cu_seqlens for unpadded FlashAttention execution.
-    """
-    def __init__(self, max_seq_len: int, eos_token_id: int = 2):
-        self.max_seq_len = max_seq_len
-        self.eos_token_id = eos_token_id
-
-    def pack(self, documents: List[List[int]]) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Packs documents into [max_seq_len] buffer and returns (tokens, cu_seqlens).
-        """
-        packed_tokens = []
-        cu_seqlens = [0]
-
-        for doc in documents:
-            doc_with_eos = list(doc) + [self.eos_token_id]
-            if len(packed_tokens) + len(doc_with_eos) <= self.max_seq_len:
-                packed_tokens.extend(doc_with_eos)
-                cu_seqlens.append(len(packed_tokens))
-            else:
-                # Truncate or spill to next packed chunk
-                remaining = self.max_seq_len - len(packed_tokens)
-                if remaining > 0:
-                    packed_tokens.extend(doc_with_eos[:remaining])
-                    cu_seqlens.append(len(packed_tokens))
-                break
-
-        tokens_tensor = torch.tensor(packed_tokens, dtype=torch.long)
-        cu_seqlens_tensor = torch.tensor(cu_seqlens, dtype=torch.int32)
-        return tokens_tensor, cu_seqlens_tensor
-
-
-if __name__ == '__main__':
-    print("=" * 65)
-    print("  MEGATRON SCALED DATA PIPELINE VERIFICATION")
-    print("=" * 65)
-
-    bin_path = "/tmp/megatron_demo.bin"
-    idx_path = "/tmp/megatron_demo.idx"
-
-    # 1. Offline Indexing
-    builder = MMapIndexedDatasetBuilder(bin_path, idx_path)
-    sample_docs = [
-        [101, 2054, 2003, 1037, 3231, 102],
-        [101, 7592, 1010, 2026, 2171, 102],
-        [101, 2129, 2024, 2115, 1029, 102],
-    ]
-    for doc in sample_docs:
-        builder.add_document(doc)
-    builder.finalize()
-
-    # 2. Zero-Copy Memory-Mapped Reading
-    ds = MMapIndexedDataset(bin_path, idx_path)
-    print(f"  Indexed Corpus Documents:       {len(ds)}")
-    print(f"  Total Indexed Tokens:          {ds.total_tokens}")
-    sample_read = ds.get_document(1)
-    print(f"  Document 1 Direct MMAP Slice:   {sample_read.tolist()}")
-
-    # 3. Sequence Packing
-    packer = SequencePacker(max_seq_len=16, eos_token_id=0)
-    packed_toks, cu_lens = packer.pack(sample_docs)
-    print(f"  Packed Tokens Length:          {len(packed_toks)}")
-    print(f"  FlashAttention cu_seqlens:     {cu_lens.tolist()}")
-    print("=" * 65)
-
-    # Cleanup temporary demo files
-    if os.path.exists(bin_path): os.remove(bin_path)
-    if os.path.exists(idx_path): os.remove(idx_path)
+# Dataset is built once offline; memory-mapped at runtime
+train_dataset = GPTDataset(
+    file_prefix="/data/pile/train",     # Path to .bin/.idx pair
+    documents=np.arange(0, num_train_docs),
+    config=config,
+)
 ```
+
+The `GPTDataset.__getitem__` returns a packed dict:
+```python
+{
+    "tokens":           torch.Tensor[S],        # Input token IDs
+    "labels":           torch.Tensor[S],        # Shifted target token IDs
+    "attention_mask":   torch.Tensor[1],        # Scalar: 1 if valid sample
+    "loss_mask":        torch.Tensor[S],        # 0 on EOD/padding positions
+    "position_ids":     torch.Tensor[S],        # Packed position offsets
+}
+```
+
+For sequence packing with `cu_seqlens`, Megatron's collator calls:
+```python
+from megatron.core.packed_seq_params import PackedSeqParams
+
+packed_seq_params = PackedSeqParams(
+    cu_seqlens_q=cu_seqlens,           # [num_docs+1] cumulative sequence offsets
+    cu_seqlens_kv=cu_seqlens,
+    max_seqlen_q=max_seqlen,
+    max_seqlen_kv=max_seqlen,
+    qkv_format='thd',                  # (total_tokens, heads, head_dim)
+)
+```
+
+This is passed directly to `flash_attn_varlen_func`, which uses `cu_seqlens` to reset softmax accumulators at document boundaries, preventing any cross-document attention contamination.
+
+
+
+

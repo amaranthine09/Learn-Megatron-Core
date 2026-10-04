@@ -104,85 +104,60 @@ Event Sync:             ▼ Bucket 2 Full       ▼ Bucket 1 Full       ▼ Buck
 Comm Stream:            └──[Async RS B2]──────┴──[Async RS B1]──────┴──[Async RS B0]──>
 ```
 
-### 2.3.1 Reference Implementation: Asynchronous Bucketed Gradient Overlap
+### 2.3.1 Megatron-Core DDP Hook Registration Pattern
+
+Megatron's `DistributedDataParallel` registers a post-accumulate gradient hook on every parameter to trigger async bucket flushing during backward — the exact pattern from `megatron/core/distributed/distributed_data_parallel.py`:
 
 ```python
-class AsynchronousBucketOverlapEngine:
-    """
-    Simulates Megatron Core's bucketed backward comm-compute overlap mechanism.
-    Accumulates gradients into contiguous fixed-size memory buckets and fires
-    non-blocking Reduce-Scatter operations on an asynchronous CUDA stream.
-    """
-    def __init__(self, model: nn.Module, dp_group: dist.ProcessGroup, bucket_size_mb: float = 40.0):
-        self.model = model
-        self.dp_group = dp_group
-        self.bucket_size_bytes = int(bucket_size_mb * 1024 * 1024)
-        
-        # Dedicated CUDA stream for asynchronous network transfers
-        self.comm_stream = torch.cuda.Stream() if torch.cuda.is_available() else None
-        
-        self.current_bucket_params: List[nn.Parameter] = []
-        self.current_bucket_bytes = 0
-        self.async_handles = []
+# megatron/core/distributed/distributed_data_parallel.py
 
-        self._register_backward_hooks()
+class DistributedDataParallel(MegatronModule):
 
-    def _register_backward_hooks(self):
+    def _register_grad_sync_hooks(self):
         """
-        Attaches a post-accumulate gradient hook to every parameter in reverse order.
+        Attaches post-accumulate gradient hooks in reverse parameter order.
+        Each hook checks if the current bucket is full and fires async Reduce-Scatter.
         """
-        for param in reversed(list(self.model.parameters())):
+        for param in reversed(list(self.module.parameters())):
             if param.requires_grad:
-                param.register_post_accumulate_grad_hook(self._make_param_hook(param))
+                param.register_post_accumulate_grad_hook(
+                    self._make_param_hook(param, self.data_parallel_group)
+                )
 
-    def _make_param_hook(self, param: nn.Parameter):
-        def hook(p: nn.Parameter):
-            self.current_bucket_params.append(p)
-            self.current_bucket_bytes += p.numel() * p.element_size()
-            
-            # When bucket threshold is reached, flush and launch async Reduce-Scatter
-            if self.current_bucket_bytes >= self.bucket_size_bytes:
-                self._flush_current_bucket()
+    def _make_param_hook(self, param, dp_group):
+        def hook(p):
+            # Accumulate into bucket; flush if threshold exceeded
+            self.grad_buffer.add_param(p)
+            if self.grad_buffer.bucket_is_full():
+                self._async_reduce_scatter_bucket(dp_group)
         return hook
 
-    def _flush_current_bucket(self):
-        if not self.current_bucket_params:
-            return
-
-        # Pack bucket gradients into a single flat buffer
-        bucket_grads = torch.cat([p.grad.view(-1) for p in self.current_bucket_params])
-        world_size = dist.get_world_size(self.dp_group)
-        
-        output_slice = torch.empty(
-            bucket_grads.numel() // world_size,
-            dtype=bucket_grads.dtype,
-            device=bucket_grads.device
-        )
+    def _async_reduce_scatter_bucket(self, dp_group):
+        """
+        Fires dist.reduce_scatter_tensor on the dedicated comm_stream,
+        overlapping with Tensor Core backward computation on the compute_stream.
+        """
+        bucket_flat = self.grad_buffer.get_flat_bucket()
+        output_shard = self.grad_buffer.get_output_shard()
 
         # Launch non-blocking Reduce-Scatter on the communication stream
-        if self.comm_stream is not None:
-            with torch.cuda.stream(self.comm_stream):
-                handle = dist.reduce_scatter_tensor(
-                    output_slice, bucket_grads,
-                    op=dist.ReduceOp.SUM, group=self.dp_group, async_op=True
-                )
-                self.async_handles.append(handle)
-        else:
+        with torch.cuda.stream(self.comm_stream):
             handle = dist.reduce_scatter_tensor(
-                output_slice, bucket_grads,
-                op=dist.ReduceOp.SUM, group=self.dp_group, async_op=True
+                output=output_shard,
+                input=bucket_flat,
+                op=dist.ReduceOp.SUM,
+                group=dp_group,
+                async_op=True,
             )
             self.async_handles.append(handle)
+        self.grad_buffer.reset_bucket()
 
-        self.current_bucket_params.clear()
-        self.current_bucket_bytes = 0
-
-    def wait_all_reductions(self):
+    def finish_grad_sync(self):
         """
-        Called before the optimizer step to ensure all asynchronous network transfers
-        have arrived and completed.
+        Called before optimizer.step(). Flushes remaining tail parameters
+        and waits for all async handles to complete.
         """
-        self._flush_current_bucket()  # Flush any remaining tail parameters
+        self._flush_tail_bucket()
         for handle in self.async_handles:
             handle.wait()
         self.async_handles.clear()

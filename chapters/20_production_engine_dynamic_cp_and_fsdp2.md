@@ -37,48 +37,17 @@ For each microbatch, a solver computes the optimal CP size balancing memory and 
 Achieves **up to $1.48\times$ speedup** on realistic variable-length datasets!
 
 ```python
-"""
-Dynamic Context Parallelism (Dynamic-CP) Solver & Subgroup Allocator.
-Selects optimal CP size per microbatch to eliminate idle GPU compute on variable sequence lengths.
-"""
-import math
-from typing import List, Dict
+from megatron.core.transformer.transformer_config import TransformerConfig
+from megatron.core import parallel_state
 
-class DynamicCPSolver:
-    """
-    Manages power-of-2 context parallel process groups: {1, 2, 4, 8, 16}.
-    Chooses minimal CP size that fits activation memory within VRAM budget.
-    """
-    def __init__(self, total_gpus: int, max_tokens_per_gpu: int = 8192):
-        self.total_gpus = total_gpus
-        self.max_tokens_per_gpu = max_tokens_per_gpu
-        self.available_cp_sizes = [2**i for i in range(int(math.log2(total_gpus)) + 1)]
-
-    def select_cp_size(self, sequence_length: int) -> int:
-        """
-        Calculates the required CP size for a microbatch of length `sequence_length`.
-        Ensures tokens_per_gpu = ceil(sequence_length / cp_size) <= max_tokens_per_gpu.
-        """
-        for cp in self.available_cp_sizes:
-            tokens_per_rank = math.ceil(sequence_length / cp)
-            if tokens_per_rank <= self.max_tokens_per_gpu:
-                return cp
-        return self.available_cp_sizes[-1]  # Fallback to maximum available CP
-
-    def partition_batch_for_dynamic_cp(self, batch_seq_lens: List[int]) -> List[Dict[str, int]]:
-        """
-        Partitions an irregular batch into execution groups with matched CP sizes.
-        """
-        assignments = []
-        for seq_len in batch_seq_lens:
-            cp_size = self.select_cp_size(seq_len)
-            assignments.append({
-                "seq_len": seq_len,
-                "cp_size": cp_size,
-                "tokens_per_gpu": math.ceil(seq_len / cp_size),
-                "dp_world_size": self.total_gpus // cp_size,
-            })
-        return assignments
+# Dynamic Context Parallelism in Megatron Core:
+# Rather than fixing CP size cluster-wide, M-Core pre-allocates power-of-2 CP sub-groups
+# (e.g. CP ∈ {1, 2, 4, 8}) and dynamically assigns microbatches to avoid idle GPU bubbles.
+config = TransformerConfig(
+    tensor_model_parallel_size=4,
+    context_parallel_size=8,
+    variable_seq_lengths=True,          # Enables dynamic handling of variable sequence lengths
+)
 ```
 
 ---
@@ -209,84 +178,7 @@ To continue your research, here are the primary sources organized by year:
 
 ---
 
-## 3.3. Complete Self-Contained Verifiable Implementation
 
-Readers can execute this self-contained script to compute exact Model Flops Utilization (MFU) across cluster topologies and verify the Muon Newton-Schulz gradient orthogonalization:
-
-```python
-import math
-import torch
-import torch.nn as nn
-
-def compute_mfu_quick(
-    num_params: int,
-    num_layers: int,
-    hidden_size: int,
-    seq_len: int,
-    global_batch_size: int,
-    step_time_sec: float,
-    num_gpus: int,
-    peak_tflops_per_gpu: float = 989.5,  # H100 BF16
-) -> float:
-    """
-    Computes exact analytic Model Flops Utilization (MFU).
-    """
-    H = hidden_size
-    # Forward FLOPs per token per layer: 6H^2 (attention) + 4H^2 (FFN) = 10H^2
-    # Full step (fwd + bwd) ≈ 3x forward
-    flops_per_token = 3 * (num_layers * (10 * H * H + 4 * H * seq_len))
-    total_tokens = global_batch_size * seq_len
-    total_flops = flops_per_token * total_tokens
-    
-    achieved_tflops = total_flops / (step_time_sec * 1e12)
-    cluster_peak_tflops = peak_tflops_per_gpu * num_gpus
-    mfu = achieved_tflops / cluster_peak_tflops
-    return mfu
-
-
-def newton_schulz_step(G: torch.Tensor, steps: int = 5) -> torch.Tensor:
-    """
-    Newton-Schulz quintic iteration for polar decomposition in Muon.
-    """
-    a, b, c = 3.4445, -4.7750, 2.0315
-    X = G.bfloat16() if G.is_cuda else G.float()
-    X = X / (X.norm() + 1e-7)
-    if X.size(0) > X.size(1):
-        X = X.T
-    for _ in range(steps):
-        A = X @ X.T
-        B = b * A + c * (A @ A)
-        X = a * X + B @ X
-    return X
-
-
-if __name__ == "__main__":
-    print("=" * 65)
-    print("  MEGATRON CORE PRODUCTION VERIFICATION")
-    print("=" * 65)
-
-    # 1. 70B Model MFU on 512 H100 GPUs
-    mfu_70b = compute_mfu_quick(
-        num_params=70_000_000_000,
-        num_layers=80,
-        hidden_size=8192,
-        seq_len=4096,
-        global_batch_size=2048,
-        step_time_sec=18.0,
-        num_gpus=512,
-    )
-    print(f"  70B Pretraining MFU (512x H100):  {mfu_70b * 100:.1f}%")
-
-    # 2. Muon Newton-Schulz Orthogonalization Test
-    G = torch.randn(8, 8)
-    X = newton_schulz_step(G, steps=5)
-    ortho_err = (X @ X.T - torch.eye(8)).abs().max().item()
-    print(f"  Muon Orthogonalization Error:     {ortho_err:.4f}")
-    print(f"  ✅ Gradient Near-Orthogonal:       {ortho_err < 0.5}")
-    print("=" * 65)
-```
-
----
 
 ## 3.4. Common Bugs & Gotchas in Megatron Core Production Architecture
 
@@ -303,11 +195,10 @@ The following battle-tested diagnostic table resolves the most frequent failure 
 
 ---
 
-## 3.5. Runnable Checklist & Verification
+## 3.5. Pre-Flight Environment Variables
 
-To validate your Megatron Core production environment and run end-to-end verification, follow this step-by-step checklist:
+Required environment variables for production Megatron Core multi-node runs:
 
-### 3.5.1 Pre-Flight Environment Setup
 ```bash
 # 1. Enforce single CUDA connection per rank to prevent thread serialization
 export CUDA_DEVICE_MAX_CONNECTIONS=1
@@ -321,34 +212,3 @@ export TORCH_NCCL_AVOID_RECORD_STREAMS=1
 export NCCL_ASYNC_ERROR_HANDLING=1
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 ```
-
-### 3.5.2 Self-Contained Execution Command
-Execute the verified production script across 8 local GPUs using `torchrun`:
-```bash
-torchrun --nproc_per_node=8 \
-  --nnodes=1 \
-  --node_rank=0 \
-  --master_addr=localhost \
-  --master_port=29500 \
-  -c "
-import torch
-import torch.distributed as dist
-from megatron_study.verification import compute_mfu_quick, newton_schulz_step
-
-# Execute standalone verification
-dist.init_process_group('nccl' if torch.cuda.is_available() else 'gloo')
-rank = dist.get_rank()
-
-if rank == 0:
-    print('Testing Megatron Core Production Architecture Primitives...')
-    G = torch.randn(64, 64, device='cuda' if torch.cuda.is_available() else 'cpu')
-    X = newton_schulz_step(G, steps=5)
-    ortho_err = (X @ X.T - torch.eye(64, device=X.device)).abs().max().item()
-    print(f'Muon Newton-Schulz 64x64 Orthogonality Error: {ortho_err:.6f}')
-    assert ortho_err < 0.1, 'Orthogonalization failed!'
-    print('✅ Megatron Core Production Architecture Verification Successful!')
-dist.destroy_process_group()
-"
-```
-
-

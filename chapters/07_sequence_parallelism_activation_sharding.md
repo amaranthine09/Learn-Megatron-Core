@@ -296,23 +296,26 @@ class SelectiveRecomputeAttention(torch.nn.Module):
         )
 
 
-# In Megatron Core the real API:
-# from megatron.core.transformer.dot_product_attention import DotProductAttention
-# The config flag that enables this is:
-# transformer_config.recompute_granularity = 'selective'   # NOT 'full'
-# transformer_config.recompute_method = 'uniform'
-#
-# Internally Megatron uses flash_attn_varlen_func or core_attention
-# wrapped in tensor_parallel.checkpoint() when selective recompute is on.
+```python
+# In Megatron Core, selective recomputation is enabled declaratively:
+from megatron.core.transformer.transformer_config import TransformerConfig
+
+config = TransformerConfig(
+    tensor_model_parallel_size=8,
+    sequence_parallel=True,
+    recompute_granularity='selective',   # Checkpoint only O(S^2) attention core
+    recompute_method='uniform',
+)
+# Internally Megatron wraps core attention in tensor_parallel.checkpoint(..., use_reentrant=False)
 ```
 
-### 1.5.7 Deep Line-by-Line Pedagogical Breakdown: `SelectiveRecomputeAttention`
+### 1.5.7 Mechanism Breakdown: `SelectiveRecomputeAttention`
 
-1. **Lines 250–257 (`_attention_core` Definition):**
+1. **`_attention_core` Isolation**:
    - Implements the pure quadratic attention operations: `scores = torch.matmul(Q, K^T) * scale`, followed by `softmax` and optional `dropout`.
    - In standard backprop, the entire $[B, h, S, S]$ probability matrix must be saved in GPU memory to compute $\frac{\partial \mathcal{L}}{\partial \text{scores}} = P \odot (\frac{\partial \mathcal{L}}{\partial P} - \sum P \odot \frac{\partial \mathcal{L}}{\partial P})$.
    - By isolating this function into an isolated sub-graph, we can checkpoint it independently from the linear GEMMs.
-2. **Lines 264–268 (`checkpoint.checkpoint(..., use_reentrant=False)`):**
+2. **`checkpoint.checkpoint(..., use_reentrant=False)`**:
    - PyTorch evaluates `_attention_core` in the forward pass, outputs the attended values $O = P \cdot V$, but **does NOT save the internal $P$ tensor to autograd's activation tape**.
    - Instead, only the inputs $(Q, K, V)$ are saved. Because $(Q, K, V)$ each have size $B \times S \times H$, their combined storage is $\mathcal{O}(S \cdot H)$—vastly smaller than the $\mathcal{O}(S^2)$ attention matrix.
    - During backward propagation, PyTorch re-executes `_attention_core` on-the-fly using the stashed $(Q, K, V)$, computes the attention probabilities, executes backprop through them, and instantly discards them from memory.

@@ -43,90 +43,25 @@ M-Core uses **Delayed Scaling**:
 - This removes all GPU stalls, allowing FP8 matrix multiplies to run at maximum hardware speed!
 
 ```python
-"""
-FP8 Delayed Scaling Mechanics & Transformer Engine Integration.
-Demonstrates:
-1. NVIDIA Transformer Engine recipe setup
-2. Standalone Delayed Scaling history buffer implementation in pure PyTorch
-"""
-import torch
-
-# ── 1. The Real Transformer Engine & Megatron Core FP8 API ──
-# import transformer_engine.pytorch as te
-# from transformer_engine.common.recipe import DelayedScaling, Format
+import transformer_engine.pytorch as te
+from transformer_engine.common.recipe import DelayedScaling, Format
 
 # Define FP8 recipe with Delayed Scaling
-# fp8_recipe = DelayedScaling(
-#     margin=0,                      # Headroom margin (in bits)
-#     interval=1,                    # How often to update scale factors (every step)
-#     fp8_format=Format.HYBRID,      # E4M3 for forward, E5M2 for backward
-#     amax_history_len=16,           # Circular buffer of 16 past iterations
-#     amax_compute_algo="max",       # Use maximum value across history window
-# )
-#
-# # Train inside the FP8 autocast context:
-# with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
-#     output = model(input_ids)
-#     loss = loss_fn(output, labels)
-# loss.backward()
+fp8_recipe = DelayedScaling(
+    margin=0,                      # Headroom margin (in bits)
+    interval=1,                    # How often to update scale factors (every step)
+    fp8_format=Format.HYBRID,      # E4M3 for forward, E5M2 for backward
+    amax_history_len=16,           # Circular buffer of 16 past iterations
+    amax_compute_algo="max",       # Use maximum value across history window
+)
 
-
-# ── 2. Standalone Reference: Delayed Scaling Buffer from Scratch ──
-class DelayedScalingTracker:
-    """
-    Simulates the Transformer Engine / M-Core Delayed Scaling mechanism.
-    Avoids host-device stalls by using past amax values to compute current scale factor.
-    """
-    FP8_E4M3_MAX = 448.0   # Maximum representable value in FP8 E4M3
-    FP8_E5M2_MAX = 57344.0 # Maximum representable value in FP8 E5M2
-
-    def __init__(self, history_len: int = 16, margin: float = 0.0):
-        self.history_len = history_len
-        self.margin = margin
-        self.history = torch.zeros(history_len)
-        self.step_count = 0
-        self.current_scale = 1.0
-
-    def compute_scale(self) -> float:
-        """Computes scale factor using the historical maximum amax from past steps."""
-        if self.step_count == 0:
-            return 1.0
-        
-        valid_steps = min(self.step_count, self.history_len)
-        past_max_amax = self.history[:valid_steps].max().item()
-        
-        if past_max_amax <= 1e-12:
-            return 1.0
-
-        # Scale factor S such that: max_val * S <= FP8_MAX * 2^(-margin)
-        target_max = self.FP8_E4M3_MAX * (2.0 ** (-self.margin))
-        scale = target_max / past_max_amax
-        return scale
-
-    def quantize_and_record(self, tensor: torch.Tensor) -> tuple[torch.Tensor, float]:
-        """
-        1. Quantizes tensor to simulated FP8 using DELAYED scale factor.
-        2. Records the current tensor's amax into the history buffer for FUTURE steps.
-        """
-        # Step A: Use scale computed from PAST history
-        scale = self.compute_scale()
-        
-        # Step B: Scale and clamp to simulated FP8 range
-        scaled_tensor = tensor * scale
-        clamped_tensor = torch.clamp(scaled_tensor, -self.FP8_E4M3_MAX, self.FP8_E4M3_MAX)
-        
-        # In real hardware, cast to torch.float8_e4m3fn
-        # fp8_tensor = clamped_tensor.to(torch.float8_e4m3fn)
-
-        # Step C: Record CURRENT step's amax for subsequent steps (asynchronous on GPU)
-        current_amax = tensor.abs().max().detach()
-        idx = self.step_count % self.history_len
-        self.history[idx] = current_amax
-        self.step_count += 1
-
-        return clamped_tensor / scale, scale
+# Train inside the FP8 autocast context:
+with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
+    output = model(input_ids)
+    loss = loss_fn(output, labels)
+loss.backward()
 ```
-
+ 
 ---
 
 ## 2.2. Distributed Checkpointing: Sharded State Dicts
@@ -149,93 +84,35 @@ M-Core implements **Fully Reshardable Distributed Checkpointing**:
 2. When loading the checkpoint on a completely different cluster topology (e.g., changing TP size from 8 to 2 or running on a single Mac CPU for evaluation), M-Core reads the global coordinate metadata, slices the files, and reconstructs the correct local tensors automatically!
 
 ```python
-"""
-Megatron Core Distributed Checkpointing (dist_checkpointing) & Resharding.
-Demonstrates the real M-Core APIs for sharded state dict creation, saving, and topology resharding.
-"""
-import os
-import torch
-from dataclasses import dataclass
-from typing import Dict, Any
+from megatron.core import dist_checkpointing
+from megatron.core.dist_checkpointing.mapping import ShardedTensor, ShardedObject
 
-# ── 1. The Real Megatron Core Checkpointing API ──
-# from megatron.core import dist_checkpointing
-# from megatron.core.dist_checkpointing.mapping import ShardedTensor, ShardedObject
-#
-# # In each model layer (e.g. ColumnParallelLinear):
-# def sharded_state_dict(self, prefix=''):
-#     return {
-#         f"{prefix}weight": ShardedTensor.from_rank_offsets(
-#             key=f"{prefix}weight",
-#             data=self.weight,
-#             # Global unpartitioned shape: [out_features_global, in_features]
-#             # Offset along partitioned dim (dim 0 for ColumnParallel):
-#             (0, self.rank * self.out_features_per_partition, self.out_features_global)
-#         )
-#     }
-#
-# # Saving checkpoint across the entire cluster asynchronously:
-# dist_checkpointing.save(
-#     sharded_state_dict=model.sharded_state_dict(),
-#     checkpoint_dir="/checkpoints/step_100000"
-# )
-#
-# # Loading checkpoint on a completely different cluster (e.g. TP=2 instead of TP=8):
-# # M-Core automatically matches ShardedTensor keys, reads the intersecting slices,
-# # and performs parallel distributed scatter/gather to reassemble local shards!
-# loaded_state_dict = dist_checkpointing.load(
-#     sharded_state_dict=new_model.sharded_state_dict(),
-#     checkpoint_dir="/checkpoints/step_100000"
-# )
-# new_model.load_state_dict(loaded_state_dict)
+# 1. In each model layer (e.g. ColumnParallelLinear):
+def sharded_state_dict(self, prefix=''):
+    return {
+        f"{prefix}weight": ShardedTensor.from_rank_offsets(
+            key=f"{prefix}weight",
+            data=self.weight,
+            # Global unpartitioned shape: [out_features_global, in_features]
+            # Offset along partitioned dim (dim 0 for ColumnParallel):
+            (0, self.rank * self.out_features_per_partition, self.out_features_global)
+        )
+    }
 
+# 2. Saving checkpoint across the entire cluster asynchronously:
+dist_checkpointing.save(
+    sharded_state_dict=model.sharded_state_dict(),
+    checkpoint_dir="/checkpoints/step_100000"
+)
 
-# ── 2. Standalone Reference: Resharding Engine from Scratch ──
-@dataclass
-class LocalShardMetadata:
-    param_name: str
-    global_shape: tuple
-    shard_slice: tuple  # (dim0_start, dim0_end, dim1_start, dim1_end)
-
-
-def reshard_tensor_2d(
-    saved_shards: list[tuple[LocalShardMetadata, torch.Tensor]],
-    target_metadata: LocalShardMetadata,
-) -> torch.Tensor:
-    """
-    Reconstructs a target shard for a different parallelism topology
-    by sampling and stitching intersecting regions from saved shards.
-    """
-    target_tensor = torch.zeros(
-        target_metadata.shard_slice[1] - target_metadata.shard_slice[0],
-        target_metadata.shard_slice[3] - target_metadata.shard_slice[2],
-        dtype=saved_shards[0][1].dtype
-    )
-    
-    t_r0, t_r1, t_c0, t_c1 = target_metadata.shard_slice
-
-    for meta, data in saved_shards:
-        s_r0, s_r1, s_c0, s_c1 = meta.shard_slice
-
-        # Compute 2D intersection of source shard and target shard
-        inter_r0 = max(t_r0, s_r0)
-        inter_r1 = min(t_r1, s_r1)
-        inter_c0 = max(t_c0, s_c0)
-        inter_c1 = min(t_c1, s_c1)
-
-        if inter_r1 > inter_r0 and inter_c1 > inter_c0:
-            # Source slice
-            src_slice = data[
-                (inter_r0 - s_r0):(inter_r1 - s_r0),
-                (inter_c0 - s_c0):(inter_c1 - s_c0)
-            ]
-            # Target destination
-            target_tensor[
-                (inter_r0 - t_r0):(inter_r1 - t_r0),
-                (inter_c0 - t_c0):(inter_c1 - t_c0)
-            ] = src_slice
-
-    return target_tensor
+# 3. Loading checkpoint on a completely different cluster topology (e.g. TP=2 instead of TP=8):
+# M-Core automatically matches ShardedTensor keys, reads the intersecting slices,
+# and performs parallel distributed scatter/gather to reassemble local shards:
+loaded_state_dict = dist_checkpointing.load(
+    sharded_state_dict=new_model.sharded_state_dict(),
+    checkpoint_dir="/checkpoints/step_100000"
+)
+new_model.load_state_dict(loaded_state_dict)
 ```
 
 ---

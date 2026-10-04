@@ -68,15 +68,15 @@ def p2p_communication(
     return recv_prev_tensor, recv_next_tensor
 ```
 
-### 2.1.3 Deep Line-by-Line Pedagogical Breakdown: `p2p_communication`
+### 2.1.3 Mechanism Breakdown: `p2p_communication`
 
-1. **Lines 337–346 (Posting Asynchronous Receives First):**
+1. **Posting Asynchronous Receives First (`dist.irecv`)**:
    - **Why Receives MUST precede Sends**: In TCP/IP and InfiniBand RDMA protocols, if Process A attempts to send a large buffer before Process B has posted an allocated receive buffer, the network card must buffer the data internally. If the tensor exceeds the NIC's small eager buffer (typically a few KB to 1 MB), the send call blocks. If Process B is simultaneously trying to send to Process A, **both processes block forever in a distributed deadlock**.
    - By creating `torch.empty(...)` and registering `dist.irecv` first, the GPU provides an explicit physical memory address ready to receive incoming packets via GPUDirect RDMA.
-2. **Lines 349–355 (Posting Asynchronous Sends):**
+2. **Posting Asynchronous Sends (`dist.isend`)**:
    - Sends are registered with `dist.P2POp(dist.isend, tensor, target_rank)`.
    - The tensor must be contiguous in memory (`.contiguous()`), otherwise NCCL will copy it to a temporary staging buffer, causing an unneeded GPU memory allocation and overhead.
-3. **Lines 405–410 (`dist.batch_isend_irecv` & Completion Synchronization):**
+3. **`dist.batch_isend_irecv` & Completion Synchronization**:
    - Rather than invoking individual CUDA kernel launches for each send and receive, `batch_isend_irecv` bundles all operations into a single atomic hardware dispatch.
    - `req.wait()` ensures that data transmission has finished before the downstream forward or backward compute kernels attempt to read or modify the tensors.
 4. **CUDA Stream Concurrency & Memory Hazard Avoidance:**

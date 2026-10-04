@@ -120,25 +120,21 @@ PyTorch relies on the **SPMD** (Single Program, Multiple Data) paradigm. Every w
 3. **Local Rank ($r_{local} \in [0, G-1]$)**: The rank of the process relative to its local machine/node (e.g., $0$ to $7$ on an 8-GPU node).
 4. **Backend**: The underlying communication library:
    - **`nccl` (NVIDIA Collective Communications Library)**: Hardware-accelerated for NVIDIA GPUs via NVLink, NVSwitch, and GPUDirect RDMA. The mandatory production backend for all LLM pretraining.
-   - **`gloo`**: Multi-platform collective communications engine that runs over CPU memory, POSIX threads, and standard TCP/IP sockets. **This allows you to learn, simulate, and verify distributed autograd and parallelism algorithms on your Mac or any CPU workstation without needing an NVIDIA cluster.**
+   - **`gloo`**: Multi-platform collective communications engine that runs over CPU memory, POSIX threads, and standard TCP/IP sockets. Used for CPU-only environments; not a production backend.
    - **`mpi`**: Message Passing Interface (used primarily in traditional supercomputing clusters).
 
 #### 1.3.1.1 PyTorch Collective Backend Compatibility Matrix
 
-When writing educational code intended to run portably on CPU (`gloo`) vs production on GPU (`nccl`), keep these crucial API differences in mind:
+The table below summarizes the key collective APIs and their NCCL support status:
 
-| Collective Primitive | PyTorch Functional API | `gloo` (CPU / Workstation) | `nccl` (NVIDIA GPU Cluster) | Production vs Educational Notes |
-| :--- | :--- | :--- | :--- | :--- |
-| **All-Reduce** | `dist.all_reduce(tensor, op)` | ✅ Fully Supported | ✅ Hardware Accelerated (NVLink / Ring) | Primary primitive for standard DDP and Tensor Parallelism. |
-| **All-Gather** | `dist.all_gather_into_tensor(out, in)` / `dist.all_gather(list, in)` | ✅ Fully Supported | ✅ Hardware Accelerated | Used in Sequence Parallelism (SP) and ZeRO weight gathering. |
-| **Broadcast** | `dist.broadcast(tensor, src)` | ✅ Fully Supported | ✅ Hardware Accelerated (Tree) | Used for parameter initialization sync. |
-| **Reduce-Scatter** | `dist.reduce_scatter_tensor(out, in, op)` | ⚠️ PyTorch $\ge 2.0$ (CPU contiguous only) | ✅ Hardware Accelerated | In older PyTorch or legacy Gloo, `reduce_scatter` is unsupported; simulate portably via `all_reduce` + `chunk`. |
-| **P2P Send / Recv** | `dist.isend()`, `dist.irecv()`, `dist.batch_isend_irecv()` | ✅ Fully Supported | ✅ GPUDirect P2P / NVLink | Core primitive for Pipeline Parallelism (1F1B) and Ring Attention. |
-| **All-to-All** | `dist.all_to_all_single(out, in)` | ⚠️ Limited / Unstable on older builds | ✅ Hardware Accelerated | Core primitive for MoE token routing and DeepSpeed-Ulysses. |
-
-> [!IMPORTANT]
-> **Portability Rule for CPU vs GPU**:
-> While `gloo` enables complete architectural understanding of distributed autograd, gradient synchronization, and 1F1B pipelining on any developer laptop, **NCCL is the sole backend capable of reaching near-wire-speed (900 GB/s NVLink, 400 Gbps InfiniBand) multi-node throughput**. Throughout this curriculum, all code snippets run seamlessly on CPU via `gloo` while strictly maintaining the exact mathematical and functional semantics of production Megatron Core NCCL implementations.
+| Collective Primitive | PyTorch Functional API | `nccl` (NVIDIA GPU Cluster) | Notes |
+| :--- | :--- | :--- | :--- |
+| **All-Reduce** | `dist.all_reduce(tensor, op)` | ✅ Hardware Accelerated (NVLink / Ring) | Primary primitive for DDP and Tensor Parallelism. |
+| **All-Gather** | `dist.all_gather_into_tensor(out, in)` | ✅ Hardware Accelerated | Used in Sequence Parallelism and ZeRO weight gathering. |
+| **Broadcast** | `dist.broadcast(tensor, src)` | ✅ Hardware Accelerated (Tree) | Used for parameter initialization sync. |
+| **Reduce-Scatter** | `dist.reduce_scatter_tensor(out, in, op)` | ✅ Hardware Accelerated | Core primitive for ZeRO-2 gradient partitioning (DistributedOptimizer). |
+| **P2P Send / Recv** | `dist.isend()`, `dist.irecv()`, `dist.batch_isend_irecv()` | ✅ GPUDirect P2P / NVLink | Core primitive for Pipeline Parallelism (1F1B) and Ring Attention. |
+| **All-to-All** | `dist.all_to_all_single(out, in)` | ✅ Hardware Accelerated | Core primitive for MoE token routing (Expert Parallelism). |
 
 ---
 

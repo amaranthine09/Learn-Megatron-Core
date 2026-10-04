@@ -151,7 +151,7 @@ from typing import Dict, List, Tuple
 
 class MasterWeightOptimizer:
     """
-    Pedagogical implementation of the Megatron FP32 Master Weight Optimizer.
+    Megatron-Core FP32 Master Weight Optimizer mechanism.
     Maintains FP32 master parameters for FP16/BF16 model parameters to prevent
     floating-point swamping during gradient descent.
     """
@@ -223,28 +223,28 @@ class MasterWeightOptimizer:
             p.grad = None
 ```
 
-### 1.2.1 Deep Line-by-Line Pedagogical Breakdown: `MasterWeightOptimizer`
+### 1.2.1 Mechanism Breakdown: `MasterWeightOptimizer`
 
-1. **Lines 22–25 (`self.master_params = [p.detach().clone().to(torch.float32)...]`):**
+1. **Master Parameter Allocation (`self.master_params`)**:
    - Each model parameter (which lives in 16-bit precision, taking 2 bytes) has an independent, unaliased clone allocated in FP32 (taking 4 bytes).
    - `.detach()` ensures that autograd will not track graph operations on the master weights.
    - `requires_grad_(False)` prevents PyTorch from allocating gradient buffers for these tensors.
-2. **Lines 28–33 (`self.exp_avg` and `self.exp_avg_sq`):**
+2. **Momentum & Variance State Allocation (`self.exp_avg`, `self.exp_avg_sq`)**:
    - Allocates the Adam first moment ($m_t$) and second moment ($v_t$) directly on the device matching the shape of `p_master`.
    - Each tensor occupies 4 bytes per parameter, summing to $4 + 4 = 8$ bytes/param for optimizer momentum and variance.
-3. **Line 51 (`grad_fp32 = p_model.grad.to(torch.float32)`):**
+3. **Gradient FP32 Casting (`grad_fp32`)**:
    - The backward pass produces a 16-bit gradient (`p_model.grad`).
    - We cast this gradient to FP32 before accumulating it into the moments. Doing this in 16-bit would cause catastrophic underflow when computing $g^2$ (e.g., $(10^{-4})^2 = 10^{-8}$, which is 0 in FP16).
-4. **Line 55 (`p_master.mul_(1.0 - self.lr * self.weight_decay)`):**
+4. **Decoupled Weight Decay**:
    - Implements decoupled AdamW weight decay: $W_t \leftarrow W_t (1 - \eta \lambda)$.
    - Performed directly in FP32 so that continuous tiny decay steps do not get truncated by machine epsilon.
-5. **Lines 58–61 (`m.mul_...` and `v.mul_...`):**
+5. **Fused Moments Update (`addcmul_`)**:
    - In-place point-wise fused linear combinations: `add_` and `addcmul_`.
    - `addcmul_` performs $v = \beta_2 v + (1 - \beta_2) \cdot (g \odot g)$ in a single hardware memory roundtrip, avoiding the allocation of an intermediate tensor for $g^2$.
-6. **Line 68 (`p_master.addcdiv_(m, denom, value=-step_size)`):**
+6. **Master Weight Update (`addcdiv_`)**:
    - Performs $p_{\text{master}} = p_{\text{master}} - \text{step\_size} \cdot \frac{m}{\text{denom}}$ in-place.
    - Because $p_{\text{master}}$ is FP32, updates down to $10^{-7}$ preserve their least significant bits.
-7. **Line 71 (`p_model.copy_(p_master.to(p_model.dtype))`):**
+7. **Model Weight Synchronization (`copy_`)**:
    - Casts the updated FP32 master weight back down to 16-bit (FP16 or BF16) and copies it directly into the parameter tensor that will be consumed by the Tensor Core GEMMs in the subsequent forward pass.
 
 ---

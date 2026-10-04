@@ -164,18 +164,15 @@ Stage 0 holds at most $p$ microbatches; Stage $p-1$ holds at most $1$ microbatch
 ```python
 import torch.distributed as dist
 
-# ── Megatron Core process group initialisation (the real API) ──
-# from megatron.core import parallel_state
-# parallel_state.initialize_model_parallel(
-#     tensor_model_parallel_size=tp,
-#     pipeline_model_parallel_size=pp,
-# )
-# pp_rank  = parallel_state.get_pipeline_model_parallel_rank()   # 0 .. p-1
-# pp_size  = parallel_state.get_pipeline_model_parallel_world_size()
-# is_first = parallel_state.is_pipeline_first_stage()
-# is_last  = parallel_state.is_pipeline_last_stage()
+from megatron.core import parallel_state
 
-# DIY equivalent — compute which transformer layers live on this PP rank:
+# Megatron Core pipeline parallel process group query:
+pp_rank  = parallel_state.get_pipeline_model_parallel_rank()   # 0 .. p-1
+pp_size  = parallel_state.get_pipeline_model_parallel_world_size()
+is_first = parallel_state.is_pipeline_first_stage()
+is_last  = parallel_state.is_pipeline_last_stage()
+
+# Contiguous layer partitioning across pipeline stages:
 def get_local_layers(num_total_layers, pp_rank, pp_size):
     """
     Assigns a contiguous slice of transformer layers to each PP stage.
@@ -214,21 +211,21 @@ def run_1f1b_steady_state(microbatches, pp_rank, pp_size, model_chunk):
         model_chunk.backward(activations.pop(j))
 ```
 
-### 1.4.4 Deep Line-by-Line Pedagogical Breakdown: `run_1f1b_steady_state`
+### 1.4.4 Mechanism Breakdown: `run_1f1b_steady_state`
 
-1. **Line 199 (`warmup_steps = pp_size - pp_rank - 1`):**
+1. **Warmup Steps (`warmup_steps = pp_size - pp_rank - 1`)**:
    - In 1F1B, downstream stages cannot execute backward until they receive forward activations.
    - Stage $r$ executes $p - r - 1$ extra forward passes upfront to prime the pipeline down to Stage $p-1$.
    - Stage 0 has the longest warmup: it must push enough microbatches into the pipeline so that by the time it finishes warmup, the very first microbatch has completed its forward pass on Stage $p-1$, computed the loss, and sent its backward gradient back to Stage $0$.
-2. **Lines 202–203 (Warmup Allocation Phase):**
+2. **Warmup Allocation Phase**:
    - Each forward pass stores its intermediate activations in the dictionary `activations[i]`.
    - On Stage 0, memory climbs up to $p$ microbatches.
-3. **Lines 206–210 (The 1F1B Steady-State Equilibrium):**
+3. **The 1F1B Steady-State Equilibrium**:
    - For every new microbatch pushed into forward (`model_chunk.forward(microbatches[i])`), an older microbatch completes its backward pass (`model_chunk.backward(activations.pop(j))`).
    - `activations.pop(j)` **immediately deletes the Python reference to the stashed activation tensor**.
    - As autograd consumes the tensor during backprop, PyTorch's Caching Allocator reclaims the exact HBM memory block, making it available for the next forward microbatch without triggering a new OS `cudaMalloc` call!
    - Result: Steady-state memory consumption remains flat and constant ($\mathcal{O}(p)$), completely independent of total microbatches $m$.
-4. **Lines 212–214 (Cooldown Drain Phase):**
+4. **Cooldown Drain Phase**:
    - Once all $m$ forward passes have run, no new activations are created.
    - Ranks iterate through the remaining stashed activations in FIFO order, running pure backward passes until the dictionary is empty.
 
