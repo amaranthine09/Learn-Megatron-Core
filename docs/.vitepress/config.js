@@ -1,5 +1,4 @@
 import { defineConfig } from 'vitepress'
-import mathjax3 from 'markdown-it-mathjax3'
 
 export default defineConfig({
   title: 'Megatron Core',
@@ -7,9 +6,7 @@ export default defineConfig({
   base: '/Learn-Megatron-Core/',
   
   markdown: {
-    config: (md) => {
-      md.use(mathjax3)
-    }
+    math: true
   },
 
   themeConfig: {
