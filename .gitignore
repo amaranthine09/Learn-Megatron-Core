@@ -47,5 +47,11 @@ Thumbs.db
 
 # Node / VitePress
 node_modules/
+package-lock.json
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+# Local Python code / scripts (Keep repository documentation-only)
+*.py
+megatron_core/
+megatron_study/
