@@ -116,4 +116,4 @@ torchrun --nproc_per_node=2 demo_megatron.py
 
 ## 📄 License
 
-This project and its documentation are open-source and licensed under the [Apache License 2.0](LICENSE).
+This project and its documentation are open-source and licensed under the [Apache License 2.0](https://github.com/amaranthine09/Learn-Megatron-Core/blob/main/LICENSE).

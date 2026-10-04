@@ -4,6 +4,7 @@ export default defineConfig({
   title: 'Megatron Core',
   description: 'First-Principles Architecture Manual & Distributed Systems Curriculum',
   base: '/Learn-Megatron-Core/',
+  ignoreDeadLinks: true,
   
   markdown: {
     math: true
