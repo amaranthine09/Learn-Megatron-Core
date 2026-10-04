@@ -13,28 +13,28 @@
 ### Part I: Distributed Foundations & Intra-Node Scaling (The NVLink Domain)
 | Ch | Module Document | Key Topics | Implementation Artifact |
 |:---:|---|---|---|
-| **01** | [Distributed Compute Foundations & Interconnect Topologies](./01_foundations_distributed_torch.md) | Hardware hierarchy, Ring/Tree/NVLS All-Reduce, process groups, autograd conjugate operators, MFU/HFU | Full autograd conjugate demo |
-| **02** | [1D Tensor Parallelism & Linear Operator Sharding](./02_tensor_parallelism_math_and_layers.md) | Column/Row parallel, $f$ & $g$ operators, vocab parallel, ParallelCrossEntropy, Tensor Core tile alignment, residual scaling | Full TP Transformer Block & Vocab Parallel |
-| **03** | [Sequence Parallelism & Dynamic Activation Management](./03_sequence_parallelism_and_activations.md) | RS+AG == AllReduce proof, SP LayerNorm, selective activation recomputation, memory economics | SP module + selective checkpointing |
+| **01** | [Distributed Compute Foundations & Interconnect Topologies](./chapters/01_foundations_distributed_torch.md) | Hardware hierarchy, Ring/Tree/NVLS All-Reduce, process groups, autograd conjugate operators, MFU/HFU | Full autograd conjugate demo |
+| **02** | [1D Tensor Parallelism & Linear Operator Sharding](./chapters/02_tensor_parallelism_math_and_layers.md) | Column/Row parallel, $f$ & $g$ operators, vocab parallel, ParallelCrossEntropy, Tensor Core tile alignment, residual scaling | Full TP Transformer Block & Vocab Parallel |
+| **03** | [Sequence Parallelism & Dynamic Activation Management](./chapters/03_sequence_parallelism_and_activations.md) | RS+AG == AllReduce proof, SP LayerNorm, selective activation recomputation, memory economics | SP module + selective checkpointing |
 
 ### Part II: Inter-Node Scaling & Memory Paradigms (The Scale-Out Fabric)
 | Ch | Module Document | Key Topics | Implementation Artifact |
 |:---:|---|---|---|
-| **04** | [Pipeline Parallelism, Distributed Schedules & DualPipe](./04_pipeline_parallelism_and_schedules.md) | GPipe vs 1F1B, exact bubble formulas, Virtual PP, DualPipe $B_{\text{input}} \perp B_{\text{weight}}$ overlap, P2P comm | 1F1B layer assignment & 2-stage P2P pipeline |
-| **05** | [Memory Accounting & The Megatron Distributed Optimizer](./05_memory_accounting_and_distributed_optimizer.md) | 16 bytes/param breakdown, ZeRO-1/2 from scratch, IEEE 754 swamping theorem, 70B parameter memory math | Full ZeRO-2 Distributed Optimizer & swamping proof |
+| **04** | [Pipeline Parallelism, Distributed Schedules & DualPipe](./chapters/04_pipeline_parallelism_and_schedules.md) | GPipe vs 1F1B, exact bubble formulas, Virtual PP, DualPipe $B_{\text{input}} \perp B_{\text{weight}}$ overlap, P2P comm | 1F1B layer assignment & 2-stage P2P pipeline |
+| **05** | [Memory Accounting & The Megatron Distributed Optimizer](./chapters/05_memory_accounting_and_distributed_optimizer.md) | 16 bytes/param breakdown, ZeRO-1/2 from scratch, IEEE 754 swamping theorem, 70B parameter memory math | Full ZeRO-2 Distributed Optimizer & swamping proof |
 
 ### Part III: Extreme-Scale Frontiers: Context Length & Sparsity
 | Ch | Module Document | Key Topics | Implementation Artifact |
 |:---:|---|---|---|
-| **06** | [Context Parallelism & Expert Parallelism (MoE)](./06_context_parallelism_and_moe.md) | Online softmax with NaN guard, Ring Attention, double-buffering ping-pong, Top-K router with capacity factor | Online softmax recurrence, Ring P2P, MoE router |
-| **07** | [Megatron Core Production Architecture & Acceleration Primitives](./07_megatron_core_production_architecture.md) | M-Core ModuleSpec, Comm-Compute Overlap, FP8 Delayed Scaling, Muon research optimizer, FSDP2 comparison | Complete M-Core production suite & Muon |
+| **06** | [Context Parallelism & Expert Parallelism (MoE)](./chapters/06_context_parallelism_and_moe.md) | Online softmax with NaN guard, Ring Attention, double-buffering ping-pong, Top-K router with capacity factor | Online softmax recurrence, Ring P2P, MoE router |
+| **07** | [Megatron Core Production Architecture & Acceleration Primitives](./chapters/07_megatron_core_production_architecture.md) | M-Core ModuleSpec, Comm-Compute Overlap, FP8 Delayed Scaling, Muon research optimizer, FSDP2 comparison | Complete M-Core production suite & Muon |
 
 ### Part IV: Production Runtime & Infrastructure Specifications
 | Ref | Reference Document | Key Topics | Implementation Artifact |
 |:---:|---|---|---|
-| **A** | [High-Throughput Token Pipelines & Sequence Packing](./appendix_a_data_pipeline.md) | Binary indexed format (.bin/.idx), MMapIndexedDataset, blended datasets, unpadded sequence packing | Full memory-mapped reader & sequence packer |
-| **B** | [Production Cluster Resilience & Fault Tolerance](./appendix_b_cluster_reliability.md) | Hardware MTBF, elastic rendezvous (c10d), NCCL watchdogs/heartbeats, async checkpointing | Resilient elastic training simulation & signal trap |
-| **C** | [Accelerator Silicon Matrix & Superchip Topologies](./appendix_c_hardware_superchips.md) | Silicon matrix (A100/H100/B200/NVL72), InfiniBand NDR/XDR, NVLink 5, Megatron vs DeepSpeed vs FSDP2 | Complete architectural comparison tables |
+| **A** | [High-Throughput Token Pipelines & Sequence Packing](./chapters/appendix_a_data_pipeline.md) | Binary indexed format (.bin/.idx), MMapIndexedDataset, blended datasets, unpadded sequence packing | Full memory-mapped reader & sequence packer |
+| **B** | [Production Cluster Resilience & Fault Tolerance](./chapters/appendix_b_cluster_reliability.md) | Hardware MTBF, elastic rendezvous (c10d), NCCL watchdogs/heartbeats, async checkpointing | Resilient elastic training simulation & signal trap |
+| **C** | [Accelerator Silicon Matrix & Superchip Topologies](./chapters/appendix_c_hardware_superchips.md) | Silicon matrix (A100/H100/B200/NVL72), InfiniBand NDR/XDR, NVLink 5, Megatron vs DeepSpeed vs FSDP2 | Complete architectural comparison tables |
 
 ---
 
