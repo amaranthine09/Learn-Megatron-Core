@@ -1,7 +1,7 @@
 # Megatron Core: Architecture Manual & Technical Documentation
 
 > **A Modular, First-Principles Technical Documentation Suite for Extreme-Scale Deep Learning**  
-> Covers: 1D Tensor Parallelism, Sequence Parallelism, Pipeline Parallelism (1F1B & DualPipe), ZeRO-1/2 Distributed Optimizer, Context Parallelism (Ring Attention), MoE Expert Parallelism, and Megatron Core Production Architecture.
+> Covers: 1D Tensor Parallelism, Sequence Parallelism, Pipeline Parallelism (1F1B & Virtual Stages), ZeRO-1/2 Distributed Optimizer, Context Parallelism (Ring Attention), MoE Expert Parallelism, and Megatron Core Production Architecture.
 >
 > All distributed algorithms run locally on **Mac CPU** via the PyTorch `gloo` backend.  
 > Use `/opt/anaconda3/bin/python3` and `torchrun --nproc_per_node=N` throughout.
@@ -44,7 +44,7 @@ Every major parallelism paradigm is organized into **focused, bite-sized article
 ### 7. Production Pretraining Engine
 - [1. M-Core Declarative ModuleSpec](./chapters/production-engine/index.md): Legacy Megatron vs. M-Core, `TransformerConfig`, and `ModuleSpec` component trees.
 - [2. FP8 Scaling & State Checkpointing](./chapters/production-engine/fp8-and-checkpointing.md): FP8 Delayed Scaling (`E4M3`/`E5M2`), Transformer Engine amax buffers, and sharded state dicts.
-- [3. Modern Optimizers (Muon) & SRE](./chapters/production-engine/modern-innovations.md): Muon Newton-Schulz polar decomposition, 2024–2026 innovations, and cluster checklists.
+- [3. Dynamic-CP & FSDP2 Extensions](./chapters/production-engine/modern-innovations.md): Dynamic Context Parallelism solvers, Megatron-FSDP2 module sharding, and cluster checklists.
 
 ### 8. Cluster Operations & Silicon Matrix
 - [Token Ingestion Pipelines & Sequence Packing](./chapters/operations/data-pipeline.md): Binary indexed datasets (`.bin`/`.idx`), `MMapIndexedDataset`, and unpadded sequence packing.

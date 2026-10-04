@@ -1,5 +1,5 @@
-# Pipeline Parallelism, Distributed Schedules & DualPipe
-> **1F1B Bubbles, Virtual Interleaving, and B_input/B_weight Decoupled Overlap**
+# Pipeline Parallelism & 1F1B Distributed Schedules
+> **Vertical Layer Sharding, GPipe Comparison, 1F1B Steady-State, and Virtual Interleaving**
 
 > **Reference Paper**: *Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM* (Narayanan et al., NVIDIA 2021, [arXiv:2104.04473](https://arxiv.org/abs/2104.04473))
 

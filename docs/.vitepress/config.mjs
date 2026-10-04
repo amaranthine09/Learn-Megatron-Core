@@ -73,7 +73,7 @@ export default defineConfig({
         collapsed: false,
         items: [
           { text: '1. 1F1B & Interleaved Virtual Stages', link: '/pipeline-parallelism/' },
-          { text: '2. DeepSeek DualPipe & P2P Comm', link: '/pipeline-parallelism/dualpipe-and-p2p' },
+          { text: '2. P2P Communication & Deadlock Avoidance', link: '/pipeline-parallelism/dualpipe-and-p2p' },
           { text: '3. 2-Stage Pipeline Implementation', link: '/pipeline-parallelism/implementation' }
         ]
       },
@@ -101,7 +101,7 @@ export default defineConfig({
         items: [
           { text: '1. M-Core Declarative ModuleSpec', link: '/production-engine/' },
           { text: '2. FP8 Scaling & State Checkpointing', link: '/production-engine/fp8-and-checkpointing' },
-          { text: '3. Modern Optimizers (Muon) & SRE', link: '/production-engine/modern-innovations' }
+          { text: '3. Dynamic-CP & FSDP2 Extensions', link: '/production-engine/modern-innovations' }
         ]
       },
       {

@@ -1,5 +1,5 @@
-# Modern Optimizers & Production Implementation
-> **Muon Polar Decomposition (Newton-Schulz), ModuleSpec Suite, and Cluster Gotchas**
+# Production Extensions & Advanced M-Core Optimizations
+> **Megatron Core ModuleSpec Suite, Dynamic Context Parallelism, and Production Diagnostics**
 
 ---
 
@@ -7,161 +7,7 @@
 
 The following are the most important recent additions to M-Core, crucial for understanding the state-of-the-art:
 
-### 3.1.1 Research Frontier: Muon Optimizer (MomentUm Orthogonalized by Newton-Schulz)
-
-> [!NOTE]
-> **Production Context**:
-> Standard Megatron Core production pretraining at scale relies on the **Distributed Optimizer (ZeRO-2)** paired with **AdamW** and **FP8 Delayed Scaling** (detailed in [Distributed Optimizer & ZeRO-2](/distributed-optimizer/)). 
-> **Muon** represents a 2024–2026 algorithmic research frontier—formulated by Keller Jordan et al. and adopted in exploratory runs by Moonshot AI and DeepSeek—that replaces AdamW's coordinate-wise scaling on 2D linear weight matrices with approximate polar decomposition.
-
-#### 3.1.1.1 Mathematical Formulation & Newton-Schulz Derivation
-Standard AdamW scales gradient updates coordinate-wise using diagonal second-moment estimators:
-$$\Delta W_{\text{AdamW}} = -\eta \cdot \frac{m_t}{\sqrt{v_t} + \epsilon}$$
-
-In contrast, Muon treats the momentum update matrix $M \in \mathbb{R}^{m \times n}$ as a linear operator and replaces coordinate scaling with an **approximate polar decomposition** $M = Q H$, updating weights along the nearest semi-orthogonal matrix $Q$:
-$$\Delta W_{\text{Muon}} = -\eta \cdot \text{NS}_5(U)$$
-where $U = G_t + \beta M_{t-1}$ (Nesterov momentum).
-
-To compute the polar decomposition without expensive Singular Value Decomposition (SVD) or matrix square root inverses, Muon employs the **quintic Newton-Schulz iteration**:
-$$X_{k+1} = a X_k + b X_k (X_k^T X_k) + c X_k (X_k^T X_k)^2$$
-
-With the exact quintic coefficients:
-$$a = 3.4445, \quad b = -4.7750, \quad c = 2.0315$$
-
-**Why these exact coefficients?**
-The polynomial $p(x) = a x + b x^3 + c x^5$ is the minimax optimal polynomial approximating the sign function on the spectrum $(0, \sqrt{3}]$. When normalized such that $\|X_0\|_2 \le 1$, iterating $X_{k+1} = p(X_k)$ contracts all singular values $\sigma_i(X)$ toward $1.0$ at a quintic rate:
-$$\lim_{k \to \infty} \sigma_i(X_k) = 1 \implies X_{\infty} X_{\infty}^T = I$$
-
-Within just 5 iterations ($k=5$), the matrix error $\|X_5 X_5^T - I\|_F$ is negligibly small ($< 10^{-4}$), yielding a mathematically rigorous orthogonal update using only standard GEMMs (`@`)!
-
-```python
-"""
-Muon Optimizer (MomentUm Orthogonalized by Newton-Schulz).
-The official 2025/2026 drop-in optimizer for Megatron Core 2D matrix weights.
-"""
-import torch
-
-def zeroth_power_via_newtonschulz5(G: torch.Tensor, steps: int = 5, eps: float = 1e-7) -> torch.Tensor:
-    """
-    Computes an approximate matrix polar decomposition / orthogonalization
-    via the quintic Newton-Schulz iteration:
-      X_{k+1} = a1*X_k + a2*X_k*(X_k^T*X_k) + a3*X_k*(X_k^T*X_k)^2
-    Converges singular values to 1, producing an orthogonal matrix.
-    """
-    assert G.ndim >= 2
-    transpose = G.shape[-2] < G.shape[-1]
-    if transpose:
-        G = G.mT
-
-    # Quintic coefficients ensuring fast convergence (Keller Jordan et al., 2024)
-    a1, a2, a3 = 3.4445, -4.7750, 2.0315
-
-    # Scale matrix so spectral norm is <= 1
-    norm = torch.linalg.norm(G, dim=(-2, -1), keepdim=True) + eps
-    X = G / norm
-
-    for _ in range(steps):
-        A = X.mT @ X
-        B = A @ A
-        X = a1 * X + a2 * (X @ A) + a3 * (X @ B)
-
-    if transpose:
-        X = X.mT
-    return X
-
-
-class Muon(torch.optim.Optimizer):
-    """
-    Muon optimizer for 2D weight matrices (Linear layers).
-    Maintains classical momentum, orthogonalizes the update matrix via Newton-Schulz,
-    applies aspect-ratio spectral scaling, and performs decoupled weight decay.
-    """
-    def __init__(
-        self,
-        params,
-        lr: float = 0.02,
-        momentum: float = 0.95,
-        weight_decay: float = 0.01,
-        nesterov: bool = True,
-        ns_steps: int = 5,
-    ):
-        defaults = dict(
-            lr=lr,
-            momentum=momentum,
-            weight_decay=weight_decay,
-            nesterov=nesterov,
-            ns_steps=ns_steps,
-        )
-        super().__init__(params, defaults)
-
-    @torch.no_grad()
-    def step(self):
-        for group in self.param_groups:
-            lr = group['lr']
-            momentum = group['momentum']
-            weight_decay = group['weight_decay']
-            nesterov = group['nesterov']
-            steps = group['ns_steps']
-
-            for p in group['params']:
-                if p.grad is None:
-                    continue
-                g = p.grad
-                if g.ndim < 2:
-                    raise ValueError(
-                        f"Muon only supports >=2D matrices (Linear weights). "
-                        f"Found shape {p.shape}. Use AdamW for 1D biases/LayerNorm."
-                    )
-
-                state = self.state[p]
-                if 'momentum_buffer' not in state:
-                    state['momentum_buffer'] = torch.zeros_like(g)
-
-                buf = state['momentum_buffer']
-                buf.mul_(momentum).add_(g)
-
-                # Nesterov momentum
-                update = g.add(buf, alpha=momentum) if nesterov else buf
-                # Orthogonalize update direction via quintic Newton-Schulz
-                u = zeroth_power_via_newtonschulz5(update, steps=steps)
-
-                # Aspect-ratio spectral scaling:
-                # Keller Jordan / Moonshot standard scaling: scale = sqrt(max(1, rows / cols))
-                scale_factor = math.sqrt(max(1.0, float(p.shape[-2]) / float(p.shape[-1])))
-                u = u * scale_factor
-
-                # Decoupled weight decay applied directly to parameter
-                if weight_decay > 0.0:
-                    p.mul_(1.0 - lr * weight_decay)
-
-                # Apply orthogonal update
-                p.add_(u, alpha=-lr)
-
-
-# ── Megatron Core Hybrid Optimizer Setup ──
-# In M-Core, Muon is paired with AdamW in a dual-optimizer scheme:
-def create_megatron_hybrid_optimizers(model, muon_lr=0.02, adamw_lr=0.001):
-    muon_params = []
-    adamw_params = []
-
-    for name, param in model.named_parameters():
-        if not param.requires_grad:
-            continue
-        # 2D weight matrices (QKV, Proj, FC1, FC2) -> Muon
-        if param.ndim >= 2 and "embed" not in name:
-            muon_params.append(param)
-        else:
-            # 1D biases, LayerNorm gains, and Embeddings -> AdamW
-            adamw_params.append(param)
-
-    opt_muon = Muon(muon_params, lr=muon_lr)
-    opt_adamw = torch.optim.AdamW(adamw_params, lr=adamw_lr, betas=(0.9, 0.95), eps=1e-8)
-    return [opt_muon, opt_adamw]
-```
-
----
-
-### 3.1.2 NVFP4: 4-Bit Training on Blackwell (GB200/GB300)
+### 3.1.1 NVFP4: 4-Bit Training on Blackwell (GB200/GB300)
 
 Going beyond FP8, NVIDIA Blackwell introduces **NVFP4**, an NVIDIA-proprietary 4-bit floating point format:
 
@@ -180,7 +26,7 @@ NVFP4:      Uses microscaling (block-wise shared scaling factors)
 
 ---
 
-### 3.1.3 Dynamic Context Parallelism (Dynamic-CP)
+### 3.1.2 Dynamic Context Parallelism (Dynamic-CP)
 
 Standard CP ([Context Parallelism & MoE](/context-parallelism/)) uses a fixed CP size for the entire training run. This is wasteful for variable-length sequence datasets (e.g., SFT or RLHF):
 - A batch containing one $128\text{k}$ token sequence requires $\text{CP} = 16$.
@@ -237,7 +83,7 @@ class DynamicCPSolver:
 
 ---
 
-### 3.1.4 Megatron-FSDP2: Per-Module Sharding with `fully_shard()`
+### 3.1.3 Megatron-FSDP2: Per-Module Sharding with `fully_shard()`
 
 Traditional Distributed Optimizer (ZeRO-2) shards gradients and optimizer states only after the backward pass.
 Megatron-FSDP2 integrates with PyTorch's native `torch.distributed.fsdp.fully_shard()` API:

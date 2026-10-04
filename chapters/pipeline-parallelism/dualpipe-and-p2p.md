@@ -1,5 +1,5 @@
-# DualPipe & Point-to-Point Communication
-> **Non-blocking P2P Batched Isend/Irecv, Deadlock Avoidance, and DeepSeek DualPipe Overlap**
+# Point-to-Point Communication & P2P Stream Architecture
+> **Non-blocking P2P Batched Isend/Irecv, Deadlock Avoidance, and CUDA Event Synchronization**
 
 ---
 
@@ -114,62 +114,7 @@ Let's compute the exact pipeline efficiency for a production-like configuration:
 
 ---
 
-## 2.3. DualPipe: The DeepSeek-V3 Innovation (2025)
-
-While training DeepSeek-V3 (671B parameters, MoE architecture), the engineers at DeepSeek developed a new pipeline schedule called **DualPipe** that achieves near-zero pipeline bubbles and fully hides cross-node communication overhead.
-
-### 2.3.1 The Architectural Breakthrough: Decoupling $B_{\text{input}}$ from $B_{\text{weight}}$
-
-In standard deep learning frameworks, backpropagation through a layer computes two separate gradient tensors inside a single monolithic kernel:
-1. **Backward for Inputs ($B_{\text{input}}$ or $\nabla_{x}$)**: Computes the gradient of the loss with respect to the input activation tensor $X$. This tensor must be sent backward across the pipeline network immediately so that the upstream stage can proceed with its backward pass.
-2. **Backward for Weights ($B_{\text{weight}}$ or $\nabla_{W}$)**: Computes the gradient of the loss with respect to layer parameters $W$ ($X^T \cdot \nabla_{Y}$). This tensor is purely local to the GPU and is only needed by the optimizer during weight updates at the end of the iteration.
-
-In standard Transformer layers:
-- **$B_{\text{input}}$ accounts for $\approx 33\%$ of the backward execution time** and produces network-bound P2P traffic.
-- **$B_{\text{weight}}$ accounts for $\approx 67\%$ of the backward execution time** and requires zero inter-GPU communication (pure local GEMM).
-
-$$B_{\text{monolithic}} = B_{\text{input}} + B_{\text{weight}}$$
-
-DualPipe splits the backward pass into two independent phases. By maintaining two concurrent microbatch streams (Stream 0 and Stream 1), DualPipe schedules the network-critical $B_{\text{input}}$ of Stream 0 concurrently with the local compute-heavy $B_{\text{weight}}$ of Stream 1!
-
-```
-                    DualPipe Fine-Grained Overlap Mechanism
-
-GPU Compute Engine:
-  Stream 0:  [ Forward F_0 ] ----------> [ B_input (∇x) 0 ] -------> [ B_weight (∇W) 0 ]
-                                                │
-Network Engine (P2P / All2All):                 ▼ (Hidden Transfer)
-                                         [ Transmit ∇x_0 ]
-                                                │
-GPU Compute Engine:                             ▼
-  Stream 1:         [ Forward F_1 ] ---------> [ B_input (∇x) 1 ] ---> [ B_weight (∇W) 1 ]
-```
-
-### 2.3.2 Execution Timeline and Bubble Reduction
-In standard 1F1B, pipeline bubbles are dictated by the dependency $F \to B$. Under DualPipe:
-- Forward chunks $F$ and backward-input chunks $B_{\text{input}}$ overlap with the communication of the complementary stream.
-- The pipeline bubble fraction drops from $\frac{p - 1}{m}$ down to:
-  $$F_{\text{bubble, DualPipe}} \approx \frac{p - 1}{2m} \quad \text{(approaching zero as microbatches scale)}$$
-- All inter-node P2P transfers and MoE All-to-All dispatch communications are completely hidden behind local GEMM operations ($F$ and $B_{\text{weight}}$).
-
-### 2.3.3 Interaction of Pipeline Parallelism with TP, SP, and CP
-
-In full 4D/5D parallel setups, Pipeline Parallelism does not operate in isolation:
-1. **PP + TP**:
-   - Each pipeline stage is not a single GPU—it is a **TP group** of $N$ GPUs (e.g. 8 GPUs within an NVLink node).
-   - When Stage $k$ finishes Layer 7, the final activation tensor is distributed across the TP group (sharded along sequence if SP is on, or replicated).
-   - Only the boundary GPUs or sequence-partitioned chunks communicate across nodes to Stage $k+1$.
-2. **PP + SP (Sequence Parallelism)**:
-   - When SP is enabled, Stage $k$'s final layer outputs an activation shard of shape $[B, S/N, H]$.
-   - Rather than gathering to $[B, S, H]$ before sending across nodes, **GPU $i$ in Stage $k$ sends its $[B, S/N, H]$ shard directly to GPU $i$ in Stage $k+1$**!
-   - This cuts P2P inter-node network transmission volume by a factor of $N$!
-3. **PP + CP (Context Parallelism)**:
-   - When context parallelism is active ($C$ GPUs per sequence slice), each PP stage contains $C$ context workers.
-   - P2P transfers preserve the CP sequence partition boundaries across pipeline stage hops.
-
----
-
-## 2.4. Summary: 3D Parallelism Placement Matrix
+## 2.3. Summary: 3D Parallelism Placement Matrix
 
 Now we can see how **Tensor Parallelism (TP)**, **Pipeline Parallelism (PP)**, and **Data Parallelism (DP)** compose:
 
