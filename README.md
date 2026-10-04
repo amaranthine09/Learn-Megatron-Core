@@ -7,48 +7,35 @@
 
 ---
 
-## 🏛️ Modular Documentation Portal
+## 🏛️ Complete Reading Order (Chapters 01 to 23)
 
-Every major parallelism paradigm is organized into **focused, bite-sized articles** with rigorous **hierarchical headings (`1.1`, `1.1.1`, `1.1.1.1`)**, mathematical proofs, and runnable implementation labs.
+The raw Markdown specification is organized into sequentially ordered chapters in the [`chapters/`](./chapters/) directory:
 
-### 1. Foundations & Interconnects
-- [1. Foundations & Interconnect Topologies](./chapters/foundations/index.md): Scale-up vs. scale-out bandwidth, Ring/Tree/NVLS All-Reduce algorithms.
-- [2. Autograd Mechanics & Memory Layouts](./chapters/foundations/autograd-and-memory.md): Multi-dimensional process groups, custom autograd conjugate hooks, and caching allocators.
-- [3. Foundations Lab & Verification](./chapters/foundations/implementation.md): Runnable CPU verification scripts, NCCL selection heuristics, and MFU/HFU arithmetic.
-
-### 2. 1D Tensor Parallelism (TP)
-- [1. Complementary GEMM Factoring](./chapters/tensor-parallelism/index.md): Why naive model parallelism failed, Column/Row parallel pairing, and autograd $f$/$g$ operators.
-- [2. Vocab Parallelism & Tensor Cores](./chapters/tensor-parallelism/vocab-and-advanced.md): `VocabParallelEmbedding`, Parallel Cross-Entropy, GQA/MQA sharding, and Tensor Core tile alignment.
-- [3. Complete PyTorch Implementation](./chapters/tensor-parallelism/implementation.md): 350-line standalone PyTorch implementation, $N \times b$ bias gotchas, and production checklists.
-
-### 3. Sequence Parallelism (SP)
-- [1. Zero-Overhead Activation Sharding](./chapters/sequence-parallelism/index.md): Memory scaling limits, the $\text{RS} + \text{AG} \equiv \text{AllReduce}$ identity, and sharded LayerNorm/Dropout.
-- [2. Memory Economics & PyTorch Lab](./chapters/sequence-parallelism/implementation.md): Selective activation recomputation vs checkpointing, autograd mappings, and runnable verification.
-
-### 4. Pipeline Parallelism (PP)
-- [1. 1F1B & Interleaved Virtual Stages](./chapters/pipeline-parallelism/index.md): Vertical layer partitioning, GPipe baseline, 1F1B steady-state, and virtual pipeline ($v$) bubble math.
-- [2. DeepSeek DualPipe & P2P Comm](./chapters/pipeline-parallelism/dualpipe-and-p2p.md): Non-blocking batched P2P, deadlock avoidance, and DualPipe $B_{\text{input}} \perp B_{\text{weight}}$ overlap.
-- [3. 2-Stage Pipeline Implementation](./chapters/pipeline-parallelism/implementation.md): Runnable 2-stage P2P pipeline, rank assignments, and failure diagnostics.
-
-### 5. Memory & Distributed Optimizer (ZeRO)
-- [1. The 16-Bytes Law & Swamping Proof](./chapters/distributed-optimizer/index.md): IEEE 754 mantissa swamping theorem, FP32 master weights, and the ZeRO-1/2/3 hierarchy.
-- [2. Buffer Layouts & Overlap Math](./chapters/distributed-optimizer/buffers-and-overlap.md): `ParamAndGradBuffer` contiguous flattening, async Reduce-Scatter overlap, and 70B/175B memory math.
-- [3. ZeRO-2 Optimizer Implementation](./chapters/distributed-optimizer/implementation.md): Complete Megatron `DistributedOptimizer` implementation and numerical validation.
-
-### 6. Context Parallelism (CP) & MoE
-- [1. Ring Attention & Online Softmax](./chapters/context-parallelism/index.md): Quadratic memory explosion, Online Softmax mathematical recurrence, and double-buffered Ring P2P.
-- [2. Mixture of Experts & EP Dispatch](./chapters/context-parallelism/mixture-of-experts.md): Switch Transformers, Top-K routing, capacity factor, and All-to-All token dispatch.
-- [3. CP & MoE Runnable Verification](./chapters/context-parallelism/implementation.md): Runnable Ring Attention, MoE router lab, and failure mode checklists.
-
-### 7. Production Pretraining Engine
-- [1. M-Core Declarative ModuleSpec](./chapters/production-engine/index.md): Legacy Megatron vs. M-Core, `TransformerConfig`, and `ModuleSpec` component trees.
-- [2. FP8 Scaling & State Checkpointing](./chapters/production-engine/fp8-and-checkpointing.md): FP8 Delayed Scaling (`E4M3`/`E5M2`), Transformer Engine amax buffers, and sharded state dicts.
-- [3. Dynamic-CP & FSDP2 Extensions](./chapters/production-engine/modern-innovations.md): Dynamic Context Parallelism solvers, Megatron-FSDP2 module sharding, and cluster checklists.
-
-### 8. Cluster Operations & Silicon Matrix
-- [Token Ingestion Pipelines & Sequence Packing](./chapters/operations/data-pipeline.md): Binary indexed datasets (`.bin`/`.idx`), `MMapIndexedDataset`, and unpadded sequence packing.
-- [Cluster Resilience & SRE Diagnostics](./chapters/operations/cluster-resilience.md): Hardware MTBF, elastic rendezvous (`c10d`), NCCL watchdogs, and async checkpointing.
-- [Accelerator Silicon & Systems Matrix](./chapters/operations/silicon-and-systems.md): H100 vs. Blackwell GB200 NVL72, InfiniBand fabrics, and Megatron vs. DeepSpeed vs. FSDP2.
+| Ch | Document | Core System Focus | Key Concepts & Primitives |
+|:---:|---|---|---|
+| **01** | [01. Foundations & Interconnects](./chapters/01_foundations_interconnects.md) | Network hierarchy & collectives | Scale-up vs. scale-out bandwidth, Ring/Tree/NVLS All-Reduce algorithms |
+| **02** | [02. Autograd & Memory Layouts](./chapters/02_foundations_autograd_and_memory.md) | Distributed autograd & process groups | Multi-dimensional process groups, autograd conjugate hooks ($f$/$g$), caching allocators |
+| **03** | [03. Foundations Implementation Lab](./chapters/03_foundations_implementation_lab.md) | Verification scripts & MFU math | Multi-GPU verification scripts, NCCL selection heuristics, MFU/HFU arithmetic |
+| **04** | [04. 1D Tensor Parallelism GEMMs](./chapters/04_tensor_parallelism_gemm_factoring.md) | Intra-node GEMM partitioning | Complementary Column/Row parallel linear pairing, non-linear activation trapping |
+| **05** | [05. Vocab Parallelism & Tensor Cores](./chapters/05_tensor_parallelism_vocab_and_alignment.md) | Embedding & LM head scaling | `VocabParallelEmbedding`, Parallel Cross-Entropy, GQA/MQA sharding, tile alignment |
+| **06** | [06. Tensor Parallelism Implementation](./chapters/06_tensor_parallelism_implementation_lab.md) | Production PyTorch TP block | Standalone PyTorch TP layers, $N \times b$ bias gotchas, production checklist |
+| **07** | [07. Sequence Parallelism Sharding](./chapters/07_sequence_parallelism_activation_sharding.md) | Sequence-dimension sharding | $\text{RS} + \text{AG} \equiv \text{AllReduce}$ identity, sharded LayerNorm/Dropout |
+| **08** | [08. Sequence Parallelism Lab](./chapters/08_sequence_parallelism_implementation_lab.md) | Memory economics & verification | Selective activation recomputation vs checkpointing, autograd mappings |
+| **09** | [09. Pipeline Parallelism 1F1B](./chapters/09_pipeline_parallelism_1f1b_schedules.md) | Inter-node model pipelining | Vertical layer partitioning, GPipe baseline, 1F1B steady-state, virtual stages ($v$) |
+| **10** | [10. P2P Communication Architecture](./chapters/10_pipeline_parallelism_p2p_communication.md) | Non-blocking transfers | Batched `isend`/`irecv`, distributed deadlock avoidance, CUDA stream synchronization |
+| **11** | [11. Pipeline Parallelism Lab](./chapters/11_pipeline_parallelism_implementation_lab.md) | 2-Stage pipeline execution | 2-stage P2P pipeline implementation, bubble math, failure diagnostics |
+| **12** | [12. Distributed Optimizer ZeRO Math](./chapters/12_distributed_optimizer_zero_math.md) | Static memory sharding | 16 bytes/param law, IEEE 754 mantissa swamping theorem, ZeRO-1/2/3 hierarchy |
+| **13** | [13. Memory Buffers & Overlap](./chapters/13_distributed_optimizer_buffers_and_overlap.md) | Memory flattening & overlap | `ParamAndGradBuffer` layout, async Reduce-Scatter overlap, 70B/175B memory math |
+| **14** | [14. Distributed Optimizer Lab](./chapters/14_distributed_optimizer_implementation_lab.md) | Native ZeRO-2 implementation | Megatron `DistributedOptimizer` from scratch, gradient clipping, swamping proofs |
+| **15** | [15. Ring Attention & Online Softmax](./chapters/15_context_parallelism_ring_attention.md) | Million-token context scaling | Quadratic memory explosion, Online Softmax mathematical recurrence, Ring P2P |
+| **16** | [16. Mixture of Experts (MoE)](./chapters/16_context_parallelism_mixture_of_experts.md) | Sparse model architectures | Switch Transformers, Top-K routing, capacity factor, All-to-All token dispatch |
+| **17** | [17. Context Parallelism & MoE Lab](./chapters/17_context_parallelism_implementation_lab.md) | Runnable CP & MoE verification | Ring Attention with online softmax, MoE router lab, failure mode checklists |
+| **18** | [18. M-Core Declarative ModuleSpec](./chapters/18_production_engine_modulespec.md) | Production engine architecture | Monolithic Megatron vs. M-Core, `TransformerConfig`, and `ModuleSpec` component trees |
+| **19** | [19. FP8 Precision & State Checkpoints](./chapters/19_production_engine_fp8_and_checkpointing.md) | Low-precision & checkpointing | FP8 Delayed Scaling (`E4M3`/`E5M2`), Transformer Engine amax buffers, sharded state dicts |
+| **20** | [20. Dynamic-CP & FSDP2 Extensions](./chapters/20_production_engine_dynamic_cp_and_fsdp2.md) | Cutting-edge M-Core additions | Dynamic Context Parallelism solver, Megatron-FSDP2 module sharding, cluster gotchas |
+| **21** | [21. Token Ingestion Pipelines](./chapters/21_operations_token_data_pipeline.md) | High-throughput data loaders | Binary indexed datasets (`.bin`/`.idx`), `MMapIndexedDataset`, unpadded sequence packing |
+| **22** | [22. Cluster Resilience & SRE](./chapters/22_operations_cluster_resilience_sre.md) | Production cluster fault tolerance | Hardware MTBF, elastic rendezvous (`c10d`), NCCL watchdogs, async checkpointing |
+| **23** | [23. Accelerator Silicon Matrix](./chapters/23_operations_accelerator_silicon_matrix.md) | Hardware specs & framework trade-offs | H100 vs. Blackwell GB200 NVL72, InfiniBand fabrics, Megatron vs. DeepSpeed vs. FSDP2 |
 
 ---
 
