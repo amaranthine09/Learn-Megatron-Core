@@ -11,7 +11,7 @@ Here is a complete, self-contained implementation demonstrating process groups, 
 """
 foundations_demo.py
 Demonstration of PyTorch Distributed Process Groups and Conjugate Autograd Operators.
-Works seamlessly on Mac (CPU) with backend="gloo".
+Standardized for distributed execution with PyTorch and NCCL.
 """
 
 import os
@@ -59,7 +59,7 @@ def run_demo():
     world_size = int(os.environ.get("WORLD_SIZE", 1))
 
     if not dist.is_initialized():
-        dist.init_process_group(backend="gloo", rank=rank, world_size=world_size)
+        dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
     print(f"[Rank {rank}/{world_size}] Initialized on Gloo CPU Backend.")
 

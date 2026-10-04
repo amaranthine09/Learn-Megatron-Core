@@ -5,7 +5,7 @@
 
 ## 3.1. Complete Self-Contained Verifiable Implementation: 2-Stage 1F1B Pipeline
 
-Readers can run this complete, self-contained Python script to simulate a 2-stage 1F1B pipeline on CPU or GPU using non-blocking Point-to-Point communication (`batch_isend_irecv`):
+Readers can run this complete, self-contained Python script to demonstrate a 2-stage 1F1B pipeline execution flow using non-blocking Point-to-Point communication (`batch_isend_irecv`):
 
 ```python
 import os
@@ -16,7 +16,7 @@ from typing import Optional
 
 class PipelineStage(nn.Module):
     """
-    Toy pipeline stage representing a set of transformer layers.
+    Pipeline stage abstraction wrapping a block of Transformer layers.
     Stage 0 lives on Rank 0; Stage 1 lives on Rank 1.
     """
     def __init__(self, stage_id: int, hidden: int):
@@ -137,7 +137,7 @@ if __name__ == "__main__":
     # If run under torchrun --nproc_per_node=2
     if "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) == 2:
         rank = int(os.environ["RANK"])
-        dist.init_process_group(backend="gloo", rank=rank, world_size=2)
+        dist.init_process_group(backend="nccl", rank=rank, world_size=2)
         run_two_stage_1f1b(rank, 2)
         dist.destroy_process_group()
     else:

@@ -3,8 +3,7 @@
 > **A Modular, First-Principles Technical Documentation Suite for Extreme-Scale Deep Learning**  
 > Covers: 1D Tensor Parallelism, Sequence Parallelism, Pipeline Parallelism (1F1B & Virtual Stages), ZeRO-1/2 Distributed Optimizer, Context Parallelism (Ring Attention), MoE Expert Parallelism, and Megatron Core Production Architecture.
 >
-> All distributed algorithms run locally on **Mac CPU** via the PyTorch `gloo` backend.  
-> Use `/opt/anaconda3/bin/python3` and `torchrun --nproc_per_node=N` throughout.
+> All specifications correspond directly to production **NVIDIA Megatron-Core (`megatron.core`)** APIs and CUDA NCCL runtimes.
 
 ---
 
