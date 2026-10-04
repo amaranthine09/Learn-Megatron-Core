@@ -1,6 +1,6 @@
-# Megatron Core: Architecture Manual & Distributed Systems Curriculum
+# Megatron Core: Architecture Manual & Technical Documentation
 
-> **A Comprehensive, First-Principles Specification for Extreme-Scale Deep Learning**
+> **A Modular, First-Principles Technical Documentation Suite for Extreme-Scale Deep Learning**  
 > Covers: 1D Tensor Parallelism, Sequence Parallelism, Pipeline Parallelism (1F1B & DualPipe), ZeRO-1/2 Distributed Optimizer, Context Parallelism (Ring Attention), MoE Expert Parallelism, and Megatron Core Production Architecture.
 >
 > All distributed algorithms run locally on **Mac CPU** via the PyTorch `gloo` backend.  
@@ -8,51 +8,52 @@
 
 ---
 
-## 🏛️ Curriculum Structure & Architecture Parts
+## 🏛️ Modular Documentation Portal
 
-### Part I: Distributed Foundations & Intra-Node Scaling (The NVLink Domain)
-| Ch | Module Document | Key Topics | Implementation Artifact |
-|:---:|---|---|---|
-| **01** | [Distributed Compute Foundations & Interconnect Topologies](/chapters/01_foundations_distributed_torch) | Hardware hierarchy, Ring/Tree/NVLS All-Reduce, process groups, autograd conjugate operators, MFU/HFU | Full autograd conjugate demo |
-| **02** | [1D Tensor Parallelism & Linear Operator Sharding](/chapters/02_tensor_parallelism_math_and_layers) | Column/Row parallel, $f$ & $g$ operators, vocab parallel, ParallelCrossEntropy, Tensor Core tile alignment, residual scaling | Full TP Transformer Block & Vocab Parallel |
-| **03** | [Sequence Parallelism & Dynamic Activation Management](/chapters/03_sequence_parallelism_and_activations) | RS+AG == AllReduce proof, SP LayerNorm, selective activation recomputation, memory economics | SP module + selective checkpointing |
+Every major parallelism paradigm is organized into **focused, bite-sized articles** with rigorous **hierarchical headings (`1.1`, `1.1.1`, `1.1.1.1`)**, mathematical proofs, and runnable implementation labs.
 
-### Part II: Inter-Node Scaling & Memory Paradigms (The Scale-Out Fabric)
-| Ch | Module Document | Key Topics | Implementation Artifact |
-|:---:|---|---|---|
-| **04** | [Pipeline Parallelism, Distributed Schedules & DualPipe](/chapters/04_pipeline_parallelism_and_schedules) | GPipe vs 1F1B, exact bubble formulas, Virtual PP, DualPipe $B_{\text{input}} \perp B_{\text{weight}}$ overlap, P2P comm | 1F1B layer assignment & 2-stage P2P pipeline |
-| **05** | [Memory Accounting & The Megatron Distributed Optimizer](/chapters/05_memory_accounting_and_distributed_optimizer) | 16 bytes/param breakdown, ZeRO-1/2 from scratch, IEEE 754 swamping theorem, 70B parameter memory math | Full ZeRO-2 Distributed Optimizer & swamping proof |
+### 1. Foundations & Interconnects
+- [1. Foundations & Interconnect Topologies](/foundations/): Scale-up vs. scale-out bandwidth, Ring/Tree/NVLS All-Reduce algorithms.
+- [2. Autograd Mechanics & Memory Layouts](/foundations/autograd-and-memory): Multi-dimensional process groups, custom autograd conjugate hooks, and caching allocators.
+- [3. Foundations Implementation & Verification](/foundations/implementation): Runnable CPU verification scripts, NCCL selection heuristics, and MFU/HFU arithmetic.
 
-### Part III: Extreme-Scale Frontiers: Context Length & Sparsity
-| Ch | Module Document | Key Topics | Implementation Artifact |
-|:---:|---|---|---|
-| **06** | [Context Parallelism & Expert Parallelism (MoE)](/chapters/06_context_parallelism_and_moe) | Online softmax with NaN guard, Ring Attention, double-buffering ping-pong, Top-K router with capacity factor | Online softmax recurrence, Ring P2P, MoE router |
-| **07** | [Megatron Core Production Architecture & Acceleration Primitives](/chapters/07_megatron_core_production_architecture) | M-Core ModuleSpec, Comm-Compute Overlap, FP8 Delayed Scaling, Muon research optimizer, FSDP2 comparison | Complete M-Core production suite & Muon |
+### 2. 1D Tensor Parallelism (TP)
+- [1. Complementary GEMM Factoring](/tensor-parallelism/): Why naive model parallelism failed, Column/Row parallel pairing, and autograd $f$/$g$ operators.
+- [2. Vocab Parallelism & Tensor Cores](/tensor-parallelism/vocab-and-advanced): `VocabParallelEmbedding`, Parallel Cross-Entropy, GQA/MQA sharding, and Tensor Core tile alignment.
+- [3. Complete PyTorch Implementation](/tensor-parallelism/implementation): 350-line standalone PyTorch implementation, $N \times b$ bias gotchas, and production checklists.
 
-### Part IV: Production Runtime & Infrastructure Specifications
-| Ref | Reference Document | Key Topics | Implementation Artifact |
-|:---:|---|---|---|
-| **A** | [High-Throughput Token Pipelines & Sequence Packing](/chapters/appendix_a_data_pipeline) | Binary indexed format (.bin/.idx), MMapIndexedDataset, blended datasets, unpadded sequence packing | Full memory-mapped reader & sequence packer |
-| **B** | [Production Cluster Resilience & Fault Tolerance](/chapters/appendix_b_cluster_reliability) | Hardware MTBF, elastic rendezvous (c10d), NCCL watchdogs/heartbeats, async checkpointing | Resilient elastic training simulation & signal trap |
-| **C** | [Accelerator Silicon Matrix & Superchip Topologies](/chapters/appendix_c_hardware_superchips) | Silicon matrix (A100/H100/B200/NVL72), InfiniBand NDR/XDR, NVLink 5, Megatron vs DeepSpeed vs FSDP2 | Complete architectural comparison tables |
+### 3. Sequence Parallelism (SP)
+- [1. Zero-Overhead Activation Sharding](/sequence-parallelism/): Memory scaling limits, the $\text{RS} + \text{AG} \equiv \text{AllReduce}$ identity, and sharded LayerNorm/Dropout.
+- [2. Memory Economics & PyTorch Lab](/sequence-parallelism/implementation): Selective activation recomputation vs checkpointing, autograd mappings, and runnable verification.
+
+### 4. Pipeline Parallelism (PP)
+- [1. 1F1B & Interleaved Virtual Stages](/pipeline-parallelism/): Vertical layer partitioning, GPipe baseline, 1F1B steady-state, and virtual pipeline ($v$) bubble math.
+- [2. DeepSeek DualPipe & P2P Comm](/pipeline-parallelism/dualpipe-and-p2p): Non-blocking batched P2P, deadlock avoidance, and DualPipe $B_{\text{input}} \perp B_{\text{weight}}$ overlap.
+- [3. 2-Stage Pipeline Implementation](/pipeline-parallelism/implementation): Runnable 2-stage P2P pipeline, rank assignments, and failure diagnostics.
+
+### 5. Memory & Distributed Optimizer (ZeRO)
+- [1. The 16-Bytes Law & Swamping Proof](/distributed-optimizer/): IEEE 754 mantissa swamping theorem, FP32 master weights, and the ZeRO-1/2/3 hierarchy.
+- [2. Buffer Layouts & Overlap Math](/distributed-optimizer/buffers-and-overlap): `ParamAndGradBuffer` contiguous flattening, async Reduce-Scatter overlap, and 70B/175B memory math.
+- [3. ZeRO-2 Optimizer Implementation](/distributed-optimizer/implementation): Complete Megatron `DistributedOptimizer` implementation and numerical validation.
+
+### 6. Context Parallelism (CP) & MoE
+- [1. Ring Attention & Online Softmax](/context-parallelism/): Quadratic memory explosion, Online Softmax mathematical recurrence, and double-buffered Ring P2P.
+- [2. Mixture of Experts & EP Dispatch](/context-parallelism/mixture-of-experts): Switch Transformers, Top-K routing, capacity factor, and All-to-All token dispatch.
+- [3. CP & MoE Runnable Verification](/context-parallelism/implementation): Runnable Ring Attention, MoE router lab, and failure mode checklists.
+
+### 7. Production Pretraining Engine
+- [1. M-Core Declarative ModuleSpec](/production-engine/): Legacy Megatron vs. M-Core, `TransformerConfig`, and `ModuleSpec` component trees.
+- [2. FP8 Scaling & State Checkpointing](/production-engine/fp8-and-checkpointing): FP8 Delayed Scaling (`E4M3`/`E5M2`), Transformer Engine amax buffers, and sharded state dicts.
+- [3. Modern Optimizers (Muon) & SRE](/production-engine/modern-innovations): Muon Newton-Schulz polar decomposition, 2024–2026 innovations, and cluster checklists.
+
+### 8. Cluster Operations & Silicon Matrix
+- [Token Ingestion Pipelines & Sequence Packing](/operations/data-pipeline): Binary indexed datasets (`.bin`/`.idx`), `MMapIndexedDataset`, and unpadded sequence packing.
+- [Cluster Resilience & SRE Diagnostics](/operations/cluster-resilience): Hardware MTBF, elastic rendezvous (`c10d`), NCCL watchdogs, and async checkpointing.
+- [Accelerator Silicon & Systems Matrix](/operations/silicon-and-systems): H100 vs. Blackwell GB200 NVL72, InfiniBand fabrics, and Megatron vs. DeepSpeed vs. FSDP2.
 
 ---
 
-## 🖥️ Running Code Directly From The Chapters
-
-Every single chapter in this curriculum is **100% self-contained**:
-- All algorithms, mathematical proofs, architectural traces, and PyTorch implementations are embedded directly within each Markdown document.
-- Readers can copy and paste any snippet directly into a Python script, terminal, or Jupyter notebook.
-- All distributed code is designed to run seamlessly on standard CPU hardware using PyTorch's `gloo` backend without requiring access to an NVIDIA GPU cluster.
-
-For example, to execute the foundational distributed conjugate dual operator test:
-```bash
-torchrun --nproc_per_node=2 demo_megatron.py
-```
-
----
-
-## 🗺️ Concept Map
+## 🗺️ The Distributed Parallelism Stack
 
 ```
                     MEGATRON CORE PARALLELISM STACK
@@ -90,27 +91,6 @@ torchrun --nproc_per_node=2 demo_megatron.py
   │    AlltoAll dispatch + combine; aux load-balance loss    │
   └─────────────────────────────────────────────────────────┘
 ```
-
----
-
-## 📐 Key Formulas Cheatsheet
-
-| Formula | Meaning |
-|---|---|
-| $\text{Volume}_{\text{AllReduce}} = 2\frac{N-1}{N}S$ | Ring All-Reduce comm per rank |
-| $\text{Volume}_{\text{RS}} + \text{Volume}_{\text{AG}} = 2\frac{N-1}{N}S$ | Why SP has zero extra comm |
-| $\text{Bubble} = \frac{p-1}{m+p-1}$ | 1F1B pipeline bubble fraction |
-| $\text{Mem}_{\text{ZeRO-2}} = 2\Phi + \frac{14\Phi}{D}$ | Per-GPU memory with ZeRO-2 |
-| $\text{FLOPs/token} \approx 6\Phi + 12Lhd_\text{head}S$ | Analytic training FLOPs |
-| $\text{MFU} = \frac{\text{FLOPs/step}}{\text{Peak TFLOPS} \times t_\text{step} \times N_\text{GPU}}$ | Model FLOPs Utilization |
-
----
-
-## 🔑 The Three Core Papers
-
-1. **[arXiv:1909.08053](https://arxiv.org/abs/1909.08053)** — Megatron-LM v1: Column/Row parallel, vocab parallel
-2. **[arXiv:2104.04473](https://arxiv.org/abs/2104.04473)** — Megatron-LM v2: Pipeline parallelism, 3D parallelism, 1F1B schedule
-3. **[arXiv:2205.05198](https://arxiv.org/abs/2205.05198)** — Megatron-LM v3: Sequence parallelism, selective activation recomputation
 
 ---
 
