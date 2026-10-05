@@ -56,9 +56,7 @@ As sequence length S grew from `1,024` to `4,096` and beyond, activation memory 
 
 Korthikanti et al. (2022) noticed an elegant algebraic equivalence in collective communications:
 
-```text
-All-Reduce(X) == All-Gather(Reduce-Scatter(X))
-```
+> `All-Reduce(X) == All-Gather(Reduce-Scatter(X))`
 
 Recall from [Distributed Foundations & Interconnects](/foundations/) that Ring All-Reduce is physically executed in two successive phases:
 1. **Scatter-Reduce**: Takes full tensors from all ranks, sums them, and leaves rank i holding a reduced `(1 / N)`-th shard.
@@ -70,9 +68,7 @@ In pure Tensor Parallelism ([1D Tensor Parallelism](/tensor-parallelism/)), imme
 > *Why reconstruct the full sequence `[B, S, H]` before LayerNorm?*
 > LayerNorm, Dropout, and Residual Additions are **completely independent across the sequence dimension S!*
 
-```text
-LayerNorm(x_{1..S}) = [LayerNorm(x_1), LayerNorm(x_2), ..., LayerNorm(x_S)]
-```
+> `LayerNorm(x_{1..S}) = [LayerNorm(x_1), LayerNorm(x_2), ..., LayerNorm(x_S)]`
 
 Because LayerNorm computes the mean and variance across the **hidden dimension H for each token individually**, **tokens at different sequence positions never communicate with each other!**
 Whether a GPU holds S tokens or `(S / N)` tokens, the LayerNorm output for each token is mathematically identical.
@@ -142,13 +138,10 @@ Let `M = B * S * H` be the total tensor volume in bytes, and N be the Tensor Par
 ### 1.4.1 Communication in Pure Tensor Parallelism:
 Each block performs 2 All-Reduces in the forward pass.
 Recall from [Distributed Foundations & Interconnects](/foundations/) that the communication volume of a Ring All-Reduce is:
-```text
-Vol_All-Reduce = 2 (((N - 1) / N)) M
-```
 
-```text
-Total Forward Comm_TP = 2 * [ 2 (((N - 1) / N)) M ] = 4 (((N - 1) / N)) M
-```
+> `Vol_All-Reduce = 2 (((N - 1) / N)) M`
+
+> `Total Forward Comm_TP = 2 * [ 2 (((N - 1) / N)) M ] = 4 (((N - 1) / N)) M`
 
 ---
 
@@ -157,26 +150,20 @@ In Sequence Parallelism, each block replaces:
 - 1 All-Reduce `\longrightarrow` 1 Reduce-Scatter + 1 All-Gather
 
 Recall from [Distributed Foundations & Interconnects](/foundations/):
-```text
-Vol_Reduce-Scatter = (((N - 1) / N)) M
-```
-```text
-Vol_All-Gather = (((N - 1) / N)) M
-```
+
+> `Vol_Reduce-Scatter = (((N - 1) / N)) M`
+
+> `Vol_All-Gather = (((N - 1) / N)) M`
 
 Summing both operations:
-```text
-Vol_Reduce-Scatter + Vol_All-Gather = (((N - 1) / N)) M + (((N - 1) / N)) M = 2 (((N - 1) / N)) M
-```
 
-```text
-Total Forward Comm_{TP+SP} = 2 * [ 2 (((N - 1) / N)) M ] = 4 (((N - 1) / N)) M
-```
+> `Vol_Reduce-Scatter + Vol_All-Gather = (((N - 1) / N)) M + (((N - 1) / N)) M = 2 (((N - 1) / N)) M`
+
+> `Total Forward Comm_{TP+SP} = 2 * [ 2 (((N - 1) / N)) M ] = 4 (((N - 1) / N)) M`
 
 ### 1.4.3 The Fundamental Equivalence Theorem:
-```text
-Comm Volume(TP) == Comm Volume(TP + SP)
-```
+
+> `Comm Volume(TP) == Comm Volume(TP + SP)`
 
 Sequence Parallelism introduces **EXACTLY ZERO additional communication bytes**, while slashing activation memory for all non-tensor-parallel layers by a factor of N!
 
@@ -194,9 +181,8 @@ Let:
 - N: Tensor Parallel size
 
 ### 1.5.1 Standard Transformer (Single GPU, No Parallelism)
-```text
-Mem_standard = S * B * H * (34 + 5 * ((a * S) / H)) bytes
-```
+
+> `Mem_standard = S * B * H * (34 + 5 * ((a * S) / H)) bytes`
 
 Where:
 - `34 * S * B * H` comes from GEMMs, LayerNorms, Dropouts, and Residuals.
@@ -205,9 +191,8 @@ Where:
 ---
 
 ### 1.5.2 Tensor Parallelism Alone (Megatron-LM v1 & v2)
-```text
-Mem_TP = S * B * H * (10 + (24 / N) + 5 * ((a * S) / (N * H))) bytes
-```
+
+> `Mem_TP = S * B * H * (10 + (24 / N) + 5 * ((a * S) / (N * H))) bytes`
 
 Notice that the **`10 * S * B * H` term is NOT divided by N!**
 - The `10 * S * B * H` corresponds to the two LayerNorms (`2 * 2 = 4`), two Dropouts (`2 * 2 = 4`), and Residual additions (2).
@@ -216,9 +201,8 @@ Notice that the **`10 * S * B * H` term is NOT divided by N!**
 ---
 
 ### 1.5.3 Tensor Parallelism + Sequence Parallelism (Megatron-LM v3)
-```text
-Mem_{TP+SP} = S * B * H * ((34 / N) + 5 * ((a * S) / (N * H))) bytes
-```
+
+> `Mem_{TP+SP} = S * B * H * ((34 / N) + 5 * ((a * S) / (N * H))) bytes`
 
 **Every single linear term is now divided by N!**
 The non-sharded `10 * S * B * H` barrier is completely demolished.
@@ -227,9 +211,9 @@ The non-sharded `10 * S * B * H` barrier is completely demolished.
 
 ### 1.5.4 Selective Activation Recomputation: Eliminating the Quadratic Term
 Look at the remaining term:
-```text
-5 * ((a * S^2 * B) / N) bytes
-```
+
+> `5 * ((a * S^2 * B) / N) bytes`
+
 This term scales **quadratically with sequence length `S^2`**. At `S = 32,768` or `128,000`, this quadratic term overwhelms all GPU memory, regardless of N.
 
 ### 1.5.5 The Selective Recomputation Insight:
@@ -245,9 +229,8 @@ Conversely, the QKV projections and MLP projections require **huge compute FLOPs
 > Store the inputs to the expensive GEMMs. Discard ONLY the cheap quadratic attention operations (Softmax, Attention Dropout), and recompute them on-the-fly during backpropagation!
 
 When using **TP + SP + Selective Recomputation**, the quadratic term is completely removed:
-```text
-Mem_{TP+SP+Selective} = (34 / N) * S * B * H bytes
-```
+
+> `Mem_{TP+SP+Selective} = (34 / N) * S * B * H bytes`
 
 ```
 Activation Memory for a 70B Model at Sequence Length 8,192:

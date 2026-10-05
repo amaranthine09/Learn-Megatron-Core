@@ -32,7 +32,7 @@ Standard CP ([Context Parallelism & MoE](/context-parallelism/)) uses a fixed CP
 - A batch containing one 128k token sequence requires `CP = 16`.
 - The next batch with a 4k max sequence wastes `15/16` of CP resources!
 
-**Dynamic-CP** pre-builds CP groups for every power-of-2 CP size `\{1, 2, 4, 8, 16, ...\}` at initialization.
+**Dynamic-CP** pre-builds CP groups for every power-of-2 CP size `{1, 2, 4, 8, 16, ...}` at initialization.
 For each microbatch, a solver computes the optimal CP size balancing memory and communication cost.
 Achieves **up to `1.48 *` speedup** on realistic variable-length datasets!
 
@@ -103,14 +103,12 @@ def apply_fsdp2_to_transformer_layers(model: torch.nn.Module, dp_mesh):
 ### 3.1.5 Production Model FLOPs Utilization (MFU) Calculator
 
 A primary metric for evaluating any distributed training cluster is **MFU (Model FLOPs Utilization)**:
-```text
-MFU = ((Actual Achieved FLOPs / Step) / (Hardware Theoretical Peak FLOPs / Step))
-```
+
+> `MFU = ((Actual Achieved FLOPs / Step) / (Hardware Theoretical Peak FLOPs / Step))`
 
 Where total training FLOPs per token for a decoder-only Transformer with activation checkpointing is:
-```text
-FLOPs / token ≈ 6Phi + 12 * L * h * d_head * S
-```
+
+> `FLOPs / token ≈ 6Phi + 12 * L * h * d_head * S`
 
 ```python
 """
@@ -182,8 +180,6 @@ To continue your research, here are the primary sources organized by year:
 
 ---
 
-
-
 ## 3.4. Common Bugs & Gotchas in Megatron Core Production Architecture
 
 The following battle-tested diagnostic table resolves the most frequent failure modes encountered when deploying Megatron Core in multi-node production clusters:
@@ -194,7 +190,7 @@ The following battle-tested diagnostic table resolves the most frequent failure 
 | **Comm-Compute Stream Desynchronization** | Async CUDA communication stream executed without explicit `compute_stream.wait_stream(comm_stream)` barrier. | Silent numerical corruption or non-deterministic loss trajectories between identical seeds. | Enforce strict stream event synchronization at every micro-tile boundary (`torch.cuda.Event.record()` / `wait()`). |
 | **Muon 1D Parameter Crash** | Passing 1D LayerNorm scales, biases, or embedding tables into Muon's 2D Newton-Schulz polar operator. | `ValueError: Muon only supports >=2D matrices (Linear weights).` | Use M-Core hybrid optimizer routing: route 2D GEMM weights to Muon; route 1D biases, norms, and embeddings to AdamW. |
 | **Distributed Checkpoint Resharding Mismatch** | Attempting to load a checkpoint across altered TP/PP sizes without unified `ShardedTensor` coordinate metadata. | `KeyError` or shape mismatch `[d0, d1] != [d0', d1']` on `dist_checkpointing.load()`. | Use native `megatron.core.dist_checkpointing` with `fully_parallel_load=True`, which dynamically recalculates slice intersections. |
-| **Dynamic-CP Microbatch Divisibility Error** | Variable-length sequence in Dynamic-CP batch not divisible by `CP * TP` head count. | NCCL assertion error `size mismatch in P2P Ring Attention buffer exchange`. | Pad each sequence in the data collator to the nearest integer multiple of `CP * TP * kv\_channels`. |
+| **Dynamic-CP Microbatch Divisibility Error** | Variable-length sequence in Dynamic-CP batch not divisible by `CP * TP` head count. | NCCL assertion error `size mismatch in P2P Ring Attention buffer exchange`. | Pad each sequence in the data collator to the nearest integer multiple of `CP * TP * kv_channels`. |
 | **Transformer Engine Spec Recursion Error** | Mixing legacy PyTorch submodules with `TELinear` without matching `TransformerLayerSubmodules` signature. | `TypeError: Unexpected keyword argument 'config'` during layer initialization. | Always generate submodules via `ModuleSpec` with explicit `submodules=TransformerLayerSubmodules(...)`. |
 
 ---

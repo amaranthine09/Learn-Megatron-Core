@@ -10,9 +10,8 @@
 Before Megatron-LM was introduced by NVIDIA in 2019, model parallelism was widely considered impractical for training large neural networks.
 
 Consider a standard 2-layer Multi-Layer Perceptron (MLP) found in every Transformer block:
-```text
-Y = GELU(X W_1) W_2
-```
+
+> `Y = GELU(X W_1) W_2`
 
 Where:
 - `X in shape [B * H]` (B is batch size `*` sequence length, H is hidden dimension)
@@ -21,29 +20,25 @@ Where:
 
 ### 1.1.1 The Naive Row-Parallel Trap:
 Suppose you naively try to split W_1 across `N = 2` GPUs along its rows (input dimension):
-```text
-W_1 = [W[1,1]; W[1,2]], where W[1,1], W[1,2] in shape [(H / 2) * 4H]
-```
+
+> `W_1 = [W[1,1]; W[1,2]], where W[1,1], W[1,2] in shape [(H / 2) * 4H]`
 
 To multiply X by this row-split W_1, the input X must also be split along its columns:
-```text
-X = [X_1 , X_2], where X_1, X_2 in shape [B * (H / 2)]
-```
+
+> `X = [X_1 , X_2], where X_1, X_2 in shape [B * (H / 2)]`
 
 Each GPU computes its local matrix product:
 - GPU 0 computes: `Z_1 = X_1 W[1,1] in shape [B * 4H]`
 - GPU 1 computes: `Z_2 = X_2 W[1,2] in shape [B * 4H]`
 
 The true intermediate activation is the sum of these outer products:
-```text
-Z = Z_1 + Z_2
-```
+
+> `Z = Z_1 + Z_2`
 
 Now comes the fatal flaw: **We must apply the non-linear activation `GELU(Z)`**.
 Because non-linear functions do not distribute over addition:
-```text
-GELU(Z_1 + Z_2) != GELU(Z_1) + GELU(Z_2)
-```
+
+> `GELU(Z_1 + Z_2) != GELU(Z_1) + GELU(Z_2)`
 
 **The Catastrophic Result**:
 GPU 0 and GPU 1 **cannot evaluate GELU locally**! They must pause, synchronize, and execute an expensive **All-Reduce communication** across the network just to compute `Z = Z_1 + Z_2` before either GPU can compute GELU!
@@ -64,15 +59,13 @@ Let us write out the exact block-matrix multiplication for the two splitting str
 
 #### 1.2.1.1 Step 1: Column-Parallel GEMM (Layer 1)
 Slice `W_1 in shape [H * 4H]` along its **columns** into `N = 2` blocks:
-```text
-W_1 = [W[1,1] , W[1,2]], where each W[1,i] in shape [H * (4H / 2)]
-```
+
+> `W_1 = [W[1,1] , W[1,2]], where each W[1,i] in shape [H * (4H / 2)]`
 
 Every GPU holds the **full, identical input** `X in shape [B * H]`.
 Multiplying X by the column-sliced matrix yields:
-```text
-X W_1 = X [W[1,1] , W[1,2]] = [X W[1,1] , X W[1,2]] = [Z[1,1] , Z[1,2]]
-```
+
+> `X W_1 = X [W[1,1] , W[1,2]] = [X W[1,1] , X W[1,2]] = [Z[1,1] , Z[1,2]]`
 
 Notice what just happened:
 - GPU 0 computes `Z[1,1] = X W[1,1]` locally.
@@ -85,9 +78,7 @@ Notice what just happened:
 Now we apply GELU to the partitioned output `[Z[1,1] , Z[1,2]]`.
 Because GELU is an **elementwise function** (it operates independently on each individual number without mixing elements across columns):
 
-```text
-GELU([Z[1,1] , Z[1,2]]) = [GELU(Z[1,1]) , GELU(Z[1,2])] = [A[1,1] , A[1,2]]
-```
+> `GELU([Z[1,1] , Z[1,2]]) = [GELU(Z[1,1]) , GELU(Z[1,2])] = [A[1,1] , A[1,2]]`
 
 - GPU 0 evaluates `GELU(Z[1,1])` on its local memory.
 - GPU 1 evaluates `GELU(Z[1,2])` on its local memory.
@@ -100,14 +91,12 @@ Now we must multiply the intermediate activations `A = [A[1,1] , A[1,2]]` by the
 Notice that A is naturally partitioned **column-wise** across the two GPUs!
 
 Therefore, we slice W_2 along its **rows**:
-```text
-W_2 = [W[2,1]; W[2,2]], where each W[2,i] in shape [(4H / 2) * H]
-```
+
+> `W_2 = [W[2,1]; W[2,2]], where each W[2,i] in shape [(4H / 2) * H]`
 
 Now perform the block matrix multiplication:
-```text
-Y = A W_2 = [A[1,1] , A[1,2]] [W[2,1]; W[2,2]] = A[1,1] W[2,1] + A[1,2] W[2,2]
-```
+
+> `Y = A W_2 = [A[1,1] , A[1,2]] [W[2,1]; W[2,2]] = A[1,1] W[2,1] + A[1,2] W[2,2]`
 
 Look at the symmetry:
 - GPU 0 already holds `A[1,1]`. It multiplies it by its local row slice `W[2,1]` to get partial output `Y_1 = A[1,1] W[2,1]`.
@@ -115,9 +104,8 @@ Look at the symmetry:
 - Both Y_1 and Y_2 have shape `[B, H]`.
 
 To obtain the true final output `Y = Y_1 + Y_2`, we execute **ONE All-Reduce (SUM)** across the GPUs!
-```text
-Y = All-Reduce(Y_1 + Y_2)
-```
+
+> `Y = All-Reduce(Y_1 + Y_2)`
 
 ### 1.2.2 The Revolutionary Result:
 In an entire 2-layer MLP block with massive matrix multiplications and non-linearities:
@@ -167,9 +155,9 @@ In an entire 2-layer MLP block with massive matrix multiplications and non-linea
 1. W_1 is **Column-Parallel** (`H -> 4H/N`).
 2. The intermediate activation Z_1 is partitioned: rank i holds `Z[1,i]`.
 3. GELU is an **elementwise function**:
-   ```text
-   GELU([Z[1,1], Z[1,2]]) = [GELU(Z[1,1]), GELU(Z[1,2])]
-   ```
+
+> `GELU([Z[1,1], Z[1,2]]) = [GELU(Z[1,1]), GELU(Z[1,2])]`
+
    Each rank evaluates GELU on its own slice **without any network communication**!
 4. W_2 is **Row-Parallel** (`4H/N -> H`). It directly consumes the partitioned activations `A[1,i]`.
 > [!TIP]
@@ -181,14 +169,12 @@ In an entire 2-layer MLP block with massive matrix multiplications and non-linea
 ## 1.3. The Megatron Multi-Head Attention Block
 
 In Multi-Head Attention (MHA), the hidden dimension H is split across h attention heads:
-```text
-d_head = (H / h)
-```
+
+> `d_head = (H / h)`
 
 Megatron partitions the heads across the N tensor parallel GPUs:
-```text
-h_local = (h / N)
-```
+
+> `h_local = (h / N)`
 
 ```
                 Megatron Causal Self-Attention
@@ -230,9 +216,9 @@ h_local = (h / N)
 
 2. **Self-Attention Computation (Local)**:
    - Each rank computes scaled dot-product attention for its own heads:
-     ```text
-     Attention(Q_i, K_i, V_i) = softmax((Q_i K_i^T / sqrt(d_head))) V_i
-     ```
+
+> `Attention(Q_i, K_i, V_i) = softmax(Q_i K_i^T / sqrt(d_head)) V_i`
+
    - Since attention heads are completely independent, **communication is 0!**
 
 3. **Output Projection (Row Parallel)**:
@@ -240,9 +226,8 @@ h_local = (h / N)
    - Operator g executes **one All-Reduce** to sum the projected vectors.
 
 ### 1.3.2 Total Forward Communications Per Transformer Block:
-```text
-Attention All-Reduce (1) + MLP All-Reduce (1) = 2 All-Reduces per Block
-```
+
+> `Attention All-Reduce (1) + MLP All-Reduce (1) = 2 All-Reduces per Block`
 
 ---
 
@@ -250,37 +235,33 @@ Attention All-Reduce (1) + MLP All-Reduce (1) = 2 All-Reduces per Block
 
 Megatron formalized the communication using two symbolic operators in the computation graph:
 
-```text
-Block(X) = X + g(RowProj(Attn(ColQKV(f(X)))))
-```
+> `Block(X) = X + g(RowProj(Attn(ColQKV(f(X)))))`
 
 ### 1.4.1 Mathematical Derivation of Gradients:
 
 #### 1.4.1.1 Operator f (Identity in Forward):
-```text
-f(X) = X
-```
+
+> `f(X) = X`
+
 During backward propagation, by chain rule:
-```text
-d(L) / d(X) = sum(i=1)^N d(L) / d(Y_i)
-```
+
+> `d(L) / d(X) = sum(i=1)^N d(L) / d(Y_i)`
+
 Since rank i holds the local gradient `d(L) / d(Y_i)`, to compute `d(L) / d(X)`, we **must All-Reduce (SUM) the incoming gradients**:
-```text
-f^*(grad) = All-Reduce(grad)
-```
+
+> `f^*(grad) = All-Reduce(grad)`
 
 #### 1.4.1.2 Operator g (All-Reduce in Forward):
-```text
-g(Y_1, ..., Y_N) = sum(i=1)^N Y_i
-```
+
+> `g(Y_1, ..., Y_N) = sum(i=1)^N Y_i`
+
 Since every rank receives the same total output Y, the gradient with respect to each input slice is identical:
-```text
-d(L) / d(Y_i) = d(L) / d(Y)
-```
+
+> `d(L) / d(Y_i) = d(L) / d(Y)`
+
 Thus, no communication is required during the backward pass:
-```text
-g^*(grad) = grad
-```
+
+> `g^*(grad) = grad`
 
 ---
 

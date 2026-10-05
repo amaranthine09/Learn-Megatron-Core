@@ -34,49 +34,42 @@ Let us examine the mathematical proof of why direct 16-bit weight updates suffer
 | **BF16** (Bfloat16) | 16 | 1 | 8 | 7 | `2^-7 ≈ 7.812 * 10^-3` | `≈ 10^-38 to 10^38` |
 
 Machine epsilon eps_mach is defined as the smallest positive number such that:
-```text
-1.0 + eps_mach != 1.0
-```
+
+> `1.0 + eps_mach != 1.0`
 
 In FP16 arithmetic, any value smaller than `2^-11 ≈ 4.88 * 10^-4` added to 1.0 is completely rounded away and destroyed!
 
 #### 1.1.1.2 The Swamping Failure Theorem
 
 Consider a model parameter W whose magnitude is normalized around `W ≈ 1.0`.
-During an AdamW optimization step, the update magnitude `\Delta W` applied to the parameter is:
-```text
-\Delta W = -eta ( (\hat{m}_t / (sqrt(\hat{v}_t) + eps)) + lambda W_t )
-```
+During an AdamW optimization step, the update magnitude `Delta W` applied to the parameter is:
+
+> `Delta W = -eta ( (m_hat_t / (sqrt(v_hat_t) + eps)) + lambda W_t )`
 
 Where:
 - eta is the learning rate (typically `1 * 10^-4` for LLM pretraining).
-- `(\hat{m}_t / (sqrt(\hat{v}_t) + eps))` is the normalized Adam step (bounded around order `~ 10^-1` to `10^-3` for stable gradients).
+- `(m_hat_t / (sqrt(v_hat_t) + eps))` is the normalized Adam step (bounded around order `~ 10^-1` to `10^-3` for stable gradients).
 - lambda is the weight decay coefficient (e.g., 0.1).
 
 The expected update magnitude is:
-```text
-|\Delta W| ≈ 10^-4 * 10^-3 = 10^-7
-```
+
+> `|Delta W| ≈ 10^-4 * 10^-3 = 10^-7`
 
 Now, attempt to perform this addition directly in 16-bit precision (FP16 or BF16):
-```text
-W_{t+1} = W_t + \Delta W = 1.0 + 10^-7
-```
+
+> `W_{t+1} = W_t + Delta W = 1.0 + 10^-7`
 
 To add two floating-point numbers, hardware alignment logic must shift the mantissa of the smaller operand to match the exponent of the larger operand:
 1. Exponent of `W_t = 1.0 = 2^0`: Exponent field is biased 0.
-2. Exponent of `\Delta W ≈ 10^-7 ≈ 2^{-23.25}`: Exponent field is biased -24.
-3. Difference in exponents: `\Delta e = 0 - (-24) = 24` bits.
-4. Mantissa of `\Delta W` must be shifted right by **24 bit positions**.
+2. Exponent of `Delta W ≈ 10^-7 ≈ 2^{-23.25}`: Exponent field is biased -24.
+3. Difference in exponents: `Delta e = 0 - (-24) = 24` bits.
+4. Mantissa of `Delta W` must be shifted right by **24 bit positions**.
 5. In FP16, the mantissa has only **10 bits**. A 24-bit right shift discards all significant bits into the hardware underflow sticky bits.
 6. The rounded result in round-to-nearest-even mode is:
-   ```text
-   fl_16(1.0 + 10^-7) = 1.0000000000_2 = 1.0
-   ```
 
-```text
-W_{t+1} == W_t (The weight never updates!)
-```
+> `fl_16(1.0 + 10^-7) = 1.0000000000_2 = 1.0`
+
+> `W_{t+1} == W_t (The weight never updates!)`
 
 If trained purely in 16-bit floating point, the model's parameters freeze in place. The entire pretraining run stalls, resulting in complete gradient stagnation and zero loss convergence.
 
@@ -87,9 +80,9 @@ To solve swamping without losing Tensor Core speed:
 - Backward propagation computes gradients in **16-bit** (g_16).
 - The optimizer maintains an **FP32 Master Weight** (W_32), which has a 23-bit mantissa.
 - The update is accumulated into FP32:
-  ```text
-  W_{32, t+1} = W[32, t] + \Delta W_32
-  ```
+
+> `W_{32, t+1} = W[32, t] + Delta W_32`
+
 - Because FP32 machine epsilon is `1.19 * 10^-7`, updates of magnitude `10^-7` preserve their significant bits and accumulate correctly over hundreds of thousands of micro-steps.
 - At the end of the optimizer step, `W_{32, t+1}` is cast down to 16-bit to form `W_{16, t+1}` for the next iteration's forward pass.
 
@@ -116,9 +109,7 @@ For standard mixed-precision training using the AdamW optimizer:
 └───────────────────────────────┴──────────────────────────────────────────────────┘
 ```
 
-```text
-Static Model Memory = (2 + 2 + 4 + 4 + 4) * Phi = 16 * Phi bytes
-```
+> `Static Model Memory = (2 + 2 + 4 + 4 + 4) * Phi = 16 * Phi bytes`
 
 #### 1.1.2.1 Concrete Numerical Scaling Across Model Classes
 
@@ -131,9 +122,9 @@ Static Model Memory = (2 + 2 + 4 + 4 + 4) * Phi = 16 * Phi bytes
 
 A single NVIDIA H100 GPU features **80 GB of HBM3 memory**.
 For a 70B model (`1,128.8 GB` static state):
-```text
-H100 GPUs Needed for Static Memory Alone = (1,128.8 GB / 80 GB) = 14.11 => 15 H100 GPUs
-```
+
+> `H100 GPUs Needed for Static Memory Alone = (1,128.8 GB / 80 GB) = 14.11 => 15 H100 GPUs`
+
 *And this is before storing even a single token activation!*
 
 ---
@@ -144,15 +135,15 @@ Why does standard FP16 require dynamic loss scaling, whereas BF16 does not?
 
 1. **FP16 Underflow Trap**:
    The minimum positive normal number representable in FP16 is:
-   ```text
-   2^-14 ≈ 6.10 * 10^-5
-   ```
+
+> `2^-14 ≈ 6.10 * 10^-5`
+
    During backpropagation through a 80-layer transformer, activation gradients undergo repeated fractional matrix multiplications. Gradients frequently drop to `10^-6` or `10^-7`. In FP16, these values underflow directly to zero (0.0).
    - **GradScaler Remedy**: PyTorch multiplies the loss by a large factor `S = 2^16 = 65,536` before backpropagation:
-     ```text
-     \tilde{g} = grad (S * Loss) = S * g
-     ```
-     This scales the gradients into the center of FP16's representable dynamic range. Before the optimizer step, the gradients are unscaled: `g = \tilde{g} / S`. If an `inf` or `nan` is detected, the step is skipped and S is halved.
+
+> `g_tilde = grad (S * Loss) = S * g`
+
+     This scales the gradients into the center of FP16's representable dynamic range. Before the optimizer step, the gradients are unscaled: `g = g_tilde / S`. If an `inf` or `nan` is detected, the step is skipped and S is halved.
 
 2. **BF16 Architectural Superiority**:
    BF16 truncates the FP32 mantissa from 23 bits down to 7 bits, but **preserves all 8 bits of the FP32 exponent**.
@@ -258,13 +249,13 @@ class MasterWeightOptimizer:
    - The backward pass produces a 16-bit gradient (`p_model.grad`).
    - We cast this gradient to FP32 before accumulating it into the moments. Doing this in 16-bit would cause catastrophic underflow when computing `g^2` (e.g., `(10^-4)^2 = 10^-8`, which is 0 in FP16).
 4. **Decoupled Weight Decay**:
-   - Implements decoupled AdamW weight decay: `W_t <= ftarrow W_t (1 - eta lambda)`.
+   - Implements decoupled AdamW weight decay: `W_t <- W_t (1 - eta lambda)`.
    - Performed directly in FP32 so that continuous tiny decay steps do not get truncated by machine epsilon.
 5. **Fused Moments Update (`addcmul_`)**:
    - In-place point-wise fused linear combinations: `add_` and `addcmul_`.
    - `addcmul_` performs `v = beta_2 v + (1 - beta_2) * (g ⊙ g)` in a single hardware memory roundtrip, avoiding the allocation of an intermediate tensor for `g^2`.
 6. **Master Weight Update (`addcdiv_`)**:
-   - Performs `p_master = p_master - step\_size * (m / denom)` in-place.
+   - Performs `p_master = p_master - step_size * (m / denom)` in-place.
    - Because p_master is FP32, updates down to `10^-7` preserve their least significant bits.
 7. **Model Weight Synchronization (`copy_`)**:
    - Casts the updated FP32 master weight back down to 16-bit (FP16 or BF16) and copies it directly into the parameter tensor that will be consumed by the Tensor Core GEMMs in the subsequent forward pass.
@@ -287,16 +278,15 @@ GPU 3: [ FP16 W (2Φ) ] [ FP16 Grad (2Φ) ] [ FP32 Master W (4Φ) ] [ FP32 m_t (
 ### 1.3.1 The Architectural Flaw: Staggering Memory Waste
 
 1. At the conclusion of backward propagation, DDP executes an `All-Reduce(SUM)` across all D GPUs so that every GPU holds the identical globally averaged gradient vector:
-   ```text
-   g_global = (1 / D) sum(r=0 to D-1) g_r
-   ```
+
+> `g_global = (1 / D) sum(r=0 to D-1) g_r`
+
 2. Each GPU then executes the local AdamW optimizer on its local copy of the FP32 master weights.
 3. Because the starting weights were identical and the averaged gradients are identical, **every GPU computes the exact same mathematical updates and produces the exact same optimizer state vectors (`m_t, v_t`)**.
 4. **The Redundancy Ratio**: Across a cluster of `D = 64` GPUs, **63 out of 64 copies of the optimizer states are 100% redundant duplicates**.
    For a 70B parameter model:
-   ```text
-   Cluster-Wide Optimizer Waste = (D - 1) * 12Phi = 63 * 846.6 GB = 53,335 GB (53.3 Terabytes!)
-   ```
+
+> `Cluster-Wide Optimizer Waste = (D - 1) * 12Phi = 63 * 846.6 GB = 53,335 GB (53.3 Terabytes!)`
 
 ---
 
@@ -329,9 +319,8 @@ In ZeRO-3 (Fully Sharded Data Parallelism):
 - Before **every single forward layer** can execute its GEMM, an `All-Gather` collective must run across the network to reconstruct the full layer weights W_l. Once the layer finishes, W_l is deleted from memory.
 - In the **backward pass**, another `All-Gather` collective must run to reconstruct W_l for the input gradient computation `(d Loss / d X) = (d Loss / d Y) W_l^T`.
 - Therefore, ZeRO-3 adds **two full All-Gather communications of the entire model parameter volume** per iteration:
-  ```text
-  Extra Comm Volume_ZeRO-3 = 2 * Phi * (((D-1) / D))
-  ```
+
+> `Extra Comm Volume_ZeRO-3 = 2 * Phi * (((D-1) / D))`
 
 #### 1.4.1.2 Network Hierarchy Contention in 3D Parallelism
 In modern clusters (e.g., 8-GPU nodes connected via NVLink internally and InfiniBand externally):
@@ -359,9 +348,8 @@ Using the standard Ring-AllReduce algorithm ([Distributed Foundations & Intercon
 1. Ring Reduce-Scatter transfers: `((D-1) / D) * (2Phi)` bytes.
 2. Ring All-Gather transfers: `((D-1) / D) * (2Phi)` bytes.
 3. Total communication volume per GPU:
-   ```text
-   Comm Volume_DDP = 2 ( ((D-1) / D) ) (2Phi) bytes
-   ```
+
+> `Comm Volume_DDP = 2 ( ((D-1) / D) ) (2Phi) bytes`
 
 ---
 
@@ -369,34 +357,27 @@ Using the standard Ring-AllReduce algorithm ([Distributed Foundations & Intercon
 
 In the Megatron Distributed Optimizer:
 1. **Backward Pass**: Instead of executing an All-Reduce on gradients, ranks execute a **`Reduce-Scatter`**:
-   ```text
-   Comm Volume_RS = ( ((D-1) / D) ) (2Phi) bytes
-   ```
+
+> `Comm Volume_RS = ( ((D-1) / D) ) (2Phi) bytes`
+
    At the end of this step, rank r holds the averaged gradient only for its assigned slice of parameters: `(2Phi / D)` bytes.
 2. **Optimizer Step**: Rank r updates its assigned partition of FP32 master weights locally:
-   ```text
-   Communication Volume = 0 bytes
-   ```
+
+> `Communication Volume = 0 bytes`
+
 3. **Weight Synchronization**: Rank r casts its updated partition of master weights back to 16-bit (`2Phi / D` bytes). An **`All-Gather`** is executed across the DP group to reconstruct the full model weights W across all ranks:
-   ```text
-   Comm Volume_AG = ( ((D-1) / D) ) (2Phi) bytes
-   ```
+
+> `Comm Volume_AG = ( ((D-1) / D) ) (2Phi) bytes`
 
 Summing the communication phases:
-```text
-Total Comm_DistOpt = Comm Volume_RS + Comm Volume_AG
-```
-```text
-Total Comm_DistOpt = ( ((D-1) / D) ) (2Phi) + ( ((D-1) / D) ) (2Phi) = 2 ( ((D-1) / D) ) (2Phi) bytes
-```
 
-```text
-Comm Volume(Standard DDP) == Comm Volume(Megatron DistOpt)
-```
+> `Total Comm_DistOpt = Comm Volume_RS + Comm Volume_AG`
 
-```text
-\Delta Network Bandwidth Overhead == 0.00%
-```
+> `Total Comm_DistOpt = ( ((D-1) / D) ) (2Phi) + ( ((D-1) / D) ) (2Phi) = 2 ( ((D-1) / D) ) (2Phi) bytes`
+
+> `Comm Volume(Standard DDP) == Comm Volume(Megatron DistOpt)`
+
+> `Delta Network Bandwidth Overhead == 0.00%`
 
 The Distributed Optimizer yields massive VRAM reductions with **zero additional bytes transmitted across the network**.
 

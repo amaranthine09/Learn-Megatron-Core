@@ -52,12 +52,12 @@ To guarantee exact reproducibility across node crashes and distributed resumptio
 Given:
 - A sequence length S (e.g. `4,096`).
 - An epoch count E.
-- Document lengths `\{L_0, L_1, ..., L_D\}`.
+- Document lengths `{L_0, L_1, ..., L_D}`.
 
 Megatron pre-computes an array of sample coordinates:
-```text
-Sample_i = (doc\_idx_i, start\_offset_i)
-```
+
+> `Sample_i = (doc_idx_i, start_offset_i)`
+
 When a document finishes mid-sequence, Megatron automatically concatenates the beginning of the next document, separated by an `<|endoftext|>` token, ensuring that **every single sequence fed to the model is exactly S tokens long with zero padding**.
 
 ---
@@ -95,9 +95,9 @@ Cumulative Seqlens (cu_seqlens): [ 0, 3, 8 ]
 
 ### 5.1 FlashAttention with `cu_seqlens`
 To prevent tokens from Sample 0 attending to tokens in Sample 1 within the same packed window, Megatron Core passes an array of cumulative sequence lengths (`cu_seqlens`) directly to FlashAttention / Transformer Engine:
-```text
-cu\_seqlens = [0, S_1, S_1 + S_2, ..., S]
-```
+
+> `cu_seqlens = [0, S_1, S_1 + S_2, ..., S]`
+
 The FlashAttention CUDA kernel uses `cu_seqlens` to reset its softmax accumulators at document boundaries, completely preventing cross-document contamination while achieving **100% arithmetic throughput**!
 
 ---
@@ -155,7 +155,4 @@ packed_seq_params = PackedSeqParams(
 ```
 
 This is passed directly to `flash_attn_varlen_func`, which uses `cu_seqlens` to reset softmax accumulators at document boundaries, preventing any cross-document attention contamination.
-
-
-
 

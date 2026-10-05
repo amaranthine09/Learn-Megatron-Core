@@ -6,25 +6,23 @@
 ## 2.1. Vocabulary Parallelism & Parallel Cross Entropy
 
 When training language models with massive vocabularies (`V = 32,000` to `256,000`), the token embedding table and final language modeling head become major memory bottlenecks:
-```text
-Params = V * H
-```
+
+> `Params = V * H`
+
 For `V = 128,000` and `H = 8,192`, the embedding matrix alone consumes **2 GB in FP16**. More critically, computing logits produces a massive activation tensor:
-```text
-Logits Memory = B * T * V * 2 bytes
-```
+
+> `Logits Memory = B * T * V * 2 bytes`
+
 For `B = 8, T = 4,096, V = 128,000`, the logits tensor is **`8.4 GB` per microbatch**, often triggering Out-Of-Memory (OOM) errors!
 
 ### 2.1.1 `VocabParallelEmbedding`
 We partition the vocabulary dimension across the N ranks:
-```text
-Vocab Partition Size = <= ft\lceil (V / N) \right\rceil
-```
+
+> `Vocab Partition Size = ceil(V / N)`
 
 Rank i holds token IDs in range:
-```text
-[start\_idx_i, end\_idx_i) = [i * (V / N), (i+1) * (V / N))
-```
+
+> `[start_idx_i, end_idx_i) = [i * (V / N), (i+1) * (V / N))`
 
 ```
 Token Input Tensor: [ token_id = 45 ]
@@ -97,14 +95,12 @@ class VocabParallelEmbedding(nn.Module):
 ### 2.1.2 `ParallelCrossEntropyLoss`: Softmax Without Gathering Logits
 
 In standard PyTorch, cross-entropy is:
-```text
-Loss = -\log ((e^z_target / sum(j=1)^V e^z_j)) = -z_target + \log (sum(j=1)^V e^z_j)
-```
+
+> `Loss = -log ((e^z_target / sum(j=1)^V e^z_j)) = -z_target + log (sum(j=1)^V e^z_j)`
 
 In Megatron, each rank i only computes logits for its local slice of vocab V_i:
-```text
-z_local in shape [B * T * (V / N)]
-```
+
+> `z_local in shape [B * T * (V / N)]`
 
 Megatron computes the loss in parallel using **three lightweight All-Reduces on scalars**:
 
@@ -190,7 +186,6 @@ class _VocabParallelCrossEntropy(torch.autograd.Function):
         grad_input.mul_(grad_output.unsqueeze(-1))
         return grad_input, None, None
 
-
 class ParallelCrossEntropyLoss(nn.Module):
     def __init__(self, tp_group=None):
         super().__init__()
@@ -206,19 +201,16 @@ class ParallelCrossEntropyLoss(nn.Module):
 
 A subtle bug in tensor-parallel implementations occurs in bias handling:
 
-```text
-Y = X W + b
-```
+> `Y = X W + b`
 
 In RowParallelLinear:
-```text
-Y = (sum(i=1)^N X_i W_i) + b
-```
+
+> `Y = (sum(i=1)^N X_i W_i) + b`
 
 If each rank computes `Z_i = X_i W_i + b`, and then performs `All-Reduce(SUM)`, the resulting tensor will be:
-```text
-sum(i=1)^N (X_i W_i + b) = (sum(i=1)^N X_i W_i) + N * b
-```
+
+> `sum(i=1)^N (X_i W_i + b) = (sum(i=1)^N X_i W_i) + N * b`
+
 The bias is added N times!
 
 ### 2.2.1 The Two Correct Fixes:
@@ -250,14 +242,12 @@ Each KV head is shared across G query heads.
 ### 2.3.1 Why GQA Changes the Tensor Parallel Constraint:
 
 In standard MHA, any N that evenly divides h works:
-```text
-h % N = 0
-```
+
+> `h % N = 0`
 
 In GQA, we must also ensure KV heads can be partitioned evenly:
-```text
-h_KV % N = 0
-```
+
+> `h_KV % N = 0`
 
 If `h_KV = 8` and `N = 4`, each rank holds `h_Q / N = 8` query heads and `h_KV / N = 2` KV heads.
 
@@ -279,9 +269,8 @@ If `h_KV = 8` and `N = 4`, each rank holds `h_Q / N = 8` query heads and `h_KV /
 A subtle but critical detail: **weight initialization must be adjusted for TP.**
 
 In a standard single-GPU model, residual projections (attention output projection and MLP FC2) are typically initialized with reduced variance to prevent residual activation blow-up:
-```text
-Std(W_out) = (0.02 / (sqrt(2 * L)))
-```
+
+> `Std(W_out) = (0.02 / (sqrt(2 * L)))`
 
 Where L is the number of transformer layers (the 2L accounts for 2 residual connections per block).
 

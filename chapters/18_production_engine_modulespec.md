@@ -132,9 +132,8 @@ This declarative decoupling is what makes Megatron Core radically superior to le
 ## 1.3. Communication-Computation Overlap (Comm-Compute Overlap)
 
 In Books 2 and 3, we treated computation and communication as sequential steps:
-```text
-Time_block = Time_GEMM + Time_All-Reduce
-```
+
+> `Time_block = Time_GEMM + Time_All-Reduce`
 
 Even with high-speed NVLink, communication takes `15 - 25%` of each step's time.
 

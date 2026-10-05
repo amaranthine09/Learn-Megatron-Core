@@ -32,18 +32,17 @@ IEEE 754 defines two distinct 8-bit formats:
 
 ### 2.1.2 Delayed Scaling Algorithm in M-Core
 To prevent numerical clipping, tensors are scaled dynamically by a scaling factor S:
-```text
-X_fp8 = clip(round(X * S))
-```
 
-Calculating the optimal scale factor `S = (FP8\_MAX / \max(|X|))` requires scanning the entire tensor, which introduces memory synchronization stalls.
+> `X_fp8 = clip(round(X * S))`
+
+Calculating the optimal scale factor `S = (FP8_MAX / max(|X|))` requires scanning the entire tensor, which introduces memory synchronization stalls.
 
 M-Core uses **Delayed Scaling**:
 - It maintains a **history buffer** of the maximum absolute values (amax) over the last N iterations (typically `N = 16`).
 - The scale factor for the current step is computed using the **historical maximum**:
-  ```text
-  S_t = (FP8\_MAX / (\max(history_t-1)))
-  ```
+
+> `S_t = (FP8_MAX / (max(history_t-1)))`
+
 - This removes all GPU stalls, allowing FP8 matrix multiplies to run at maximum hardware speed!
 
 ```python

@@ -10,9 +10,9 @@
 Training a 70B–405B parameter model takes weeks or months across thousands of GPUs. In this regime, **hardware failure is not an anomaly — it is a mathematical certainty**:
 - An individual GPU accelerator has an annual failure rate of `~ 3% - 5%` (due to HBM3 thermal cycling, voltage regulator drift, or SRAM bit flips).
 - In a cluster of `16,384` accelerators:
-  ```text
-  Expected Failures per Day = ((16,384 * 0.04) / 365) ≈ 1.8 failures per day!
-  ```
+
+> `Expected Failures per Day = ((16,384 * 0.04) / 365) ≈ 1.8 failures per day!`
+
 - Every 12 to 24 hours, an InfiniBand cable drops packets, a GPU throws an uncorrectable double-bit ECC error, or an NVLink bridge fails.
 
 If your training harness crashes and requires manual human intervention to restart, **effective cluster training time drops below 50%**. Production Megatron Core deployments rely on **Elastic Rendezvous**, **Heartbeat Watchdogs**, and **Non-Blocking Distributed Checkpointing**.

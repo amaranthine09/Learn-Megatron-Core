@@ -17,9 +17,8 @@ Both require collective communications (`all_reduce`, `reduce_scatter`, `all_gat
 If you attempt to run Tensor Parallelism across nodes (`TP > 8`), the high-frequency all-reduce calls hit the slower inter-node network, and the GPUs spend over **60% of their time idling waiting for communication!**
 
 **Rule of Thumb in Production:**
-```text
-Tensor Parallel Size (TP) <= Number of GPUs per Node (typically 8)
-```
+
+> `Tensor Parallel Size (TP) <= Number of GPUs per Node (typically 8)`
 
 To scale a model across hundreds or thousands of GPUs, we must partition the model **vertically across layers** using **Pipeline Parallelism (PP)**, where communication happens only at stage boundaries!
 
@@ -29,9 +28,7 @@ To scale a model across hundreds or thousands of GPUs, we must partition the mod
 
 In Pipeline Parallelism with p pipeline stages, the L layers of a Transformer are distributed sequentially:
 
-```text
-Layers per Stage = (L / p)
-```
+> `Layers per Stage = (L / p)`
 
 ```
                 4-Stage Pipeline Architecture (L = 32 layers)
@@ -83,56 +80,50 @@ Let:
 
 Let us trace the timeline:
 1. **Warmup Phase**: Stage 0 starts immediately at `t = 0`. But Stage p-1 cannot start until Microbatch 1 has propagated through all preceding p-1 stages!
-   ```text
-   Warmup Idle Time = (p - 1) * t_f
-   ```
+
+> `Warmup Idle Time = (p - 1) * t_f`
+
 2. **Cooldown Phase**: After Stage 0 completes its final forward microbatch, it must wait for backward gradients to travel back from Stage p-1 through all p-1 stages!
-   ```text
-   Cooldown Idle Time = (p - 1) * t_b
-   ```
+
+> `Cooldown Idle Time = (p - 1) * t_b`
+
 3. **Total Idle Bubble Time Across All Stages**:
-   ```text
-   t_bubble = (p - 1) * (t_f + t_b)
-   ```
+
+> `t_bubble = (p - 1) * (t_f + t_b)`
 
 The **Ideal Execution Time** (if all GPUs were computing with 100% efficiency with zero pipeline delays) is:
-```text
-t_ideal = m * (t_f + t_b)
-```
+
+> `t_ideal = m * (t_f + t_b)`
 
 The **Total Elapsed Time** of the entire step is:
-```text
-t_total = t_ideal + t_bubble = (m + p - 1) * (t_f + t_b)
-```
+
+> `t_total = t_ideal + t_bubble = (m + p - 1) * (t_f + t_b)`
 
 The **Pipeline Bubble Fraction (F_bubble)** is defined as the ratio of idle time to total time:
-```text
-F_bubble = (t_bubble / t_total) = (((p - 1) * (t_f + t_b)) / ((m + p - 1) * (t_f + t_b))) = ((p - 1) / (m + p - 1))
-```
+
+> `F_bubble = (t_bubble / t_total) = (((p - 1) * (t_f + t_b)) / ((m + p - 1) * (t_f + t_b))) = ((p - 1) / (m + p - 1))`
 
 #### 1.3.1.2 Concrete Numerical Case Study:
 Look at what this formula means in practice:
 - If `m = p = 8` (8 microbatches on 8 stages):
-  ```text
-  F_bubble = ((8 - 1) / (8 + 8 - 1)) = (7 / 15) ≈ 46.7%
-  ```
+
+> `F_bubble = ((8 - 1) / (8 + 8 - 1)) = (7 / 15) ≈ 46.7%`
+
   Almost **half of your multimillion-dollar cluster is sitting idle**!
 - If `m = 4p = 32` (`m = 32, p = 8`):
-  ```text
-  F_bubble = (7 / (32 + 7)) = (7 / 39) ≈ 17.9%
-  ```
+
+> `F_bubble = (7 / (32 + 7)) = (7 / 39) ≈ 17.9%`
+
 - If `m = 8p = 64` (`m = 64, p = 8`):
-  ```text
-  F_bubble = (7 / (64 + 7)) = (7 / 71) ≈ 9.86%
-  ```
+
+> `F_bubble = (7 / (64 + 7)) = (7 / 71) ≈ 9.86%`
 
 #### 1.3.1.3 The Fatal GPipe Flaw: The Memory Wall
 To make the bubble small, you must make `m >> p`.
 However, in GPipe, **all m microbatches run their forward pass before a single backward pass executes!**
 Stage 0 must hold the activation tensors of all m microbatches in GPU VRAM simultaneously!
-```text
-Peak Activation Memory_GPipe = O(m)
-```
+
+> `Peak Activation Memory_GPipe = O(m)`
 
 If `m = 64`, Stage 0 must store 64 microbatches of activations. For a 70B or 405B parameter model, Stage 0 **crashes with Out-Of-Memory (OOM) before the first backward pass even begins!**
 
@@ -173,14 +164,12 @@ Time ──>  |<-- Warmup -->|<----------- Steady State 1F1B ---------->|  |<- C
 
 ### 1.4.3 The Mathematical Memory Guarantee: Decoupled from m
 At Stage 0, the maximum number of outstanding un-freed microbatch activations is capped at:
-```text
-Peak Activation Memory_1F1B = O(p)
-```
+
+> `Peak Activation Memory_1F1B = O(p)`
 
 More precisely, on Stage i, the maximum number of in-flight activations is:
-```text
-In-Flight Activations_Stage i <= p - i
-```
+
+> `In-Flight Activations_Stage i <= p - i`
 
 Stage 0 holds at most p microbatches; Stage p-1 holds at most 1 microbatch!
 **This completely breaks the memory barrier**: You can increase m from 32 to `1,000` to shrink the pipeline bubble without consuming a single extra byte of activation VRAM!
@@ -212,7 +201,6 @@ def get_local_layers(num_total_layers, pp_rank, pp_size):
     start = pp_rank * layers_per_stage
     end   = start + layers_per_stage
     return list(range(start, end))
-
 
 # 1F1B Steady-State Loop (conceptual, no dist calls for clarity):
 def run_1f1b_steady_state(microbatches, pp_rank, pp_size, model_chunk):
@@ -294,30 +282,26 @@ Now, microbatch 1 travels through Device `0 -> 1 -> 2 -> 3` for Virtual Chunk 1,
 
 In the seminal Megatron-LM v2 paper (*Narayanan et al., 2021*), the exact bubble fraction for Interleaved 1F1B with v virtual stages is derived as:
 
-```text
-F[bubble, interleaved] = ((p - 1) / (v * m + p - 1))
-```
+> `F[bubble, interleaved] = ((p - 1) / (v * m + p - 1))`
 
 #### 1.5.1.1 Asymptotic Approximation:
 When the number of microbatches is very large (`v * m >> p`), the `+ (p - 1)` term in the denominator becomes negligible, yielding the commonly quoted asymptotic rule of thumb:
-```text
-F[bubble, interleaved] ≈ (1 / v) * ((p - 1) / m)
-```
+
+> `F[bubble, interleaved] ≈ (1 / v) * ((p - 1) / m)`
 
 #### 1.5.1.2 Worked Numerical Comparison (`m = 8, p = 8, v = 2`):
 Let us evaluate a practical pretraining setup with 8 pipeline stages, 8 microbatches, and 2 virtual stages per GPU:
 - **Standard 1F1B (`v = 1`)**:
-  ```text
-  F_bubble = ((8 - 1) / (8 + 8 - 1)) = (7 / 15) ≈ 46.67%
-  ```
+
+> `F_bubble = ((8 - 1) / (8 + 8 - 1)) = (7 / 15) ≈ 46.67%`
+
 - **Exact Interleaved 1F1B (`v = 2`)**:
-  ```text
-  F[bubble, interleaved] = ((8 - 1) / (2 * 8 + 8 - 1)) = (7 / 23) ≈ 30.43%
-  ```
+
+> `F[bubble, interleaved] = ((8 - 1) / (2 * 8 + 8 - 1)) = (7 / 23) ≈ 30.43%`
+
 - **Asymptotic Approximation**:
-  ```text
-  F[bubble, approx] ≈ (1 / 2) * (7 / 8) = 43.75%
-  ```
+
+> `F[bubble, approx] ≈ (1 / 2) * (7 / 8) = 43.75%`
 
 Notice the critical distinction: the exact formula shows that interleaving with `v=2` reduces the idle bubble from **46.67% down to 30.43%**, cutting the absolute idle time substantially more than the naive asymptotic approximation suggests!
 
@@ -358,7 +342,6 @@ def get_interleaved_local_layers(num_total_layers, pp_rank, pp_size, num_virtual
 
     return local_layers
 
-
 # Example usage:
 for gpu_rank in range(4):
     layers = get_interleaved_local_layers(32, gpu_rank, pp_size=4, num_virtual_stages=2)
@@ -367,7 +350,6 @@ for gpu_rank in range(4):
 # GPU 1: layers [4, 5, 6, 7, 20, 21, 22, 23]
 # GPU 2: layers [8, 9, 10, 11, 24, 25, 26, 27]
 # GPU 3: layers [12, 13, 14, 15, 28, 29, 30, 31]
-
 
 # In Megatron Core the real API:
 # from megatron.core import parallel_state

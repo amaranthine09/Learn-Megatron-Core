@@ -58,13 +58,12 @@ class DistributedOperation(torch.autograd.Function):
 ### 2.2.2 The Conjugate Inversion Principle
 Notice what happens during backpropagation:
 - If a forward operation is an **identity** (data passed to N ranks without modification), the gradient accumulated at each rank must be **summed** across all N ranks:
-  ```text
-  Forward: Identity => Backward: All-Reduce (Sum)
-  ```
+
+> `Forward: Identity => Backward: All-Reduce (Sum)`
+
 - If a forward operation is a **sum** across ranks (combining partial computations), each rank receives the identical upstream gradient during backprop:
-  ```text
-  Forward: All-Reduce (Sum) => Backward: Identity
-  ```
+
+> `Forward: All-Reduce (Sum) => Backward: Identity`
 
 This is the exact mathematical foundation of Megatron's f and g operators!
 

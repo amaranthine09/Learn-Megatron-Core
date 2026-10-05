@@ -141,9 +141,7 @@ for k in range(num_warmup_microbatches):
 
 ### 3.1.3 Pipeline Bubble Fraction
 
-```text
-Bubble Fraction = ((p - 1) / (m + p - 1))
-```
+> `Bubble Fraction = ((p - 1) / (m + p - 1))`
 
 Where p = pipeline stages, m = number of microbatches per global batch.
 
@@ -156,9 +154,9 @@ Where p = pipeline stages, m = number of microbatches per global batch.
 | 128 | 5.4% | 94.6% |
 
 Megatron-Core's interleaved 1F1B schedule (`num_model_chunks > 1`) reduces the bubble to:
-```text
-Bubble Fraction (Interleaved) = (1 / m) * ((p-1) / V)
-```
+
+> `Bubble Fraction (Interleaved) = (1 / m) * ((p-1) / V)`
+
 where V is the number of virtual pipeline stages per physical rank.
 
 ---

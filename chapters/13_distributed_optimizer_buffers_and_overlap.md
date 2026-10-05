@@ -84,7 +84,6 @@ Megatron Core solves this through the **`main_grad` pattern** managed by `megatr
 
 ---
 
-
 ---
 
 ## 2.3. Overlapping Communication with Computation: The Asynchronous Bucket Engine

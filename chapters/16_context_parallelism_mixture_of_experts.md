@@ -9,9 +9,9 @@ Dense Large Language Models become computationally prohibitive to scale beyond a
 
 **Mixture of Experts (MoE)** decouples total parameter capacity from FLOPs per token:
 - The standard dense MLP block is replaced by E distinct, independent expert MLPs:
-  ```text
-  Expert_set = \{ MLP_1, MLP_2, ..., MLP_E \}
-  ```
+
+> `Expert_set = { MLP_1, MLP_2, ..., MLP_E }`
+
 - A parameterized **Router (Gating Network)** routes each token to a sparse subset of k experts (typically `k = 1` or `k = 2`, out of `E = 8, 64, or 256` experts).
 
 ```
@@ -39,25 +39,24 @@ For a model with `E = 64` experts and `k = 2`:
 
 Given token embedding `x in shape [H]`:
 1. The router computes raw routing logits via a linear projection `W_g in shape [H * E]`:
-   ```text
-   h(x) = x * W_g in shape [E]
-   ```
+
+> `h(x) = x * W_g in shape [E]`
+
 2. Softmax normalization over all experts:
-   ```text
-   P(x) = Softmax(h(x)), P_i(x) = (e^{h_i(x)} / sum(j=1)^E e^{h_j(x)})
-   ```
+
+> `P(x) = Softmax(h(x)), P_i(x) = (e^{h_i(x)} / sum(j=1)^E e^{h_j(x)})`
+
 3. Select the Top-k expert indices:
-   ```text
-   TopK_set = Top-k(P(x), k)
-   ```
+
+> `TopK_set = Top-k(P(x), k)`
+
 4. Renormalize the routing gates among the chosen k experts so their weights sum to 1.0:
-   ```text
-   g_i(x) = (P_i(x) / sum(j in TopK_set) P_j(x)) for i in TopK_set
-   ```
+
+> `g_i(x) = (P_i(x) / sum(j in TopK_set) P_j(x)) for i in TopK_set`
+
 5. Final MoE output:
-   ```text
-   y = sum(i in TopK_set) g_i(x) * MLP_i(x)
-   ```
+
+> `y = sum(i in TopK_set) g_i(x) * MLP_i(x)`
 
 ---
 
@@ -78,21 +77,20 @@ Let T be the total number of tokens in a training microbatch.
 Define two probability distributions over the E experts:
 
 1. **Fraction of Dispatched Tokens (f_i)**: The empirical ratio of tokens assigned to expert i:
-   ```text
-   f_i = (1 / T) sum(t=1)^T Indicator(Expert i in TopK_set_t)
-   ```
+
+> `f_i = (1 / T) sum(t=1)^T Indicator(Expert i in TopK_set_t)`
+
    *(Note: Because the argmax indicator function Indicator is non-differentiable, backpropagation cannot pass gradients through f_i directly.)*
 
 2. **Average Routing Probability (P_i)**: The mean continuous probability assigned to expert i by the router:
-   ```text
-   P_i = (1 / T) sum(t=1)^T P_i(x_t)
-   ```
+
+> `P_i = (1 / T) sum(t=1)^T P_i(x_t)`
+
    *(This quantity is fully differentiable with respect to router weights W_g.)*
 
 The auxiliary loss is defined as:
-```text
-Loss_aux = alpha * E sum(i=1)^E f_i * P_i
-```
+
+> `Loss_aux = alpha * E sum(i=1)^E f_i * P_i`
 
 Where:
 - E is the number of experts (scaling factor).
@@ -101,19 +99,16 @@ Where:
 #### 2.1.2.2 Proof of Minimum at Uniform Load
 
 By the Cauchy-Schwarz inequality, for positive vectors f and P constrained by `sum f_i = 1` and `sum P_i = 1`:
-```text
-sum(i=1)^E f_i P_i >= (1 / E) ( sum(i=1)^E sqrt(f_i P_i) )^2 >= (1 / E)
-```
+
+> `sum(i=1)^E f_i P_i >= (1 / E) ( sum(i=1)^E sqrt(f_i P_i) )^2 >= (1 / E)`
 
 The minimum occurs **if and only if all experts receive an equal share of tokens**:
-```text
-f_i = (1 / E), P_i = (1 / E) for all i in \{1, ..., E\}
-```
+
+> `f_i = (1 / E), P_i = (1 / E) for all i in {1, ..., E}`
 
 At this point of perfect balance:
-```text
-Loss_aux = alpha * E sum(i=1)^E ((1 / E) * (1 / E)) = alpha * E (E * (1 / E^2)) = alpha
-```
+
+> `Loss_aux = alpha * E sum(i=1)^E ((1 / E) * (1 / E)) = alpha * E (E * (1 / E^2)) = alpha`
 
 Any imbalance increases `sum f_i P_i`, penalizing the router and forcing it to distribute tokens uniformly across the entire expert pool.
 
@@ -123,9 +118,8 @@ Any imbalance increases `sum f_i P_i`, penalizing the router and forcing it to d
 
 When an MoE model has `E = 64` or 256 experts, the expert weights cannot fit on a single GPU.
 We partition the experts across P_EP GPUs:
-```text
-Experts per GPU = (E / P_EP)
-```
+
+> `Experts per GPU = (E / P_EP)`
 
 - GPU 0 hosts Experts `0 ... 7`.
 - GPU 1 hosts Experts `8 ... 15`.
@@ -195,16 +189,13 @@ In modern architectures like DeepSeek-V3 or Mixtral trained on 128k contexts, **
 
 ---
 
-
 ---
 
 ## 2.3. Summary: The Complete 5D Parallelism Matrix
 
 With Context Parallelism and Expert Parallelism added to the Megatron architectural stack, training frontier AI systems spans **5 orthogonal parallelism dimensions**:
 
-```text
-Total Cluster GPUs = TP * CP * EP * PP * DP
-```
+> `Total Cluster GPUs = TP * CP * EP * PP * DP`
 
 ```
 ┌─────────────────────────┬──────────────────────┬──────────────────────┬───────────────────────────────┐

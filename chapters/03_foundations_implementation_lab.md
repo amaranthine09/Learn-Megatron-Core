@@ -19,7 +19,7 @@ Best for **large tensors** (gradient buckets, embedding tables):
 #### 3.1.1.2 Algorithm B: Double Binary Tree (Latency-Optimal)
 Best for **small tensors** or **very large** N:
 - Two complementary binary trees; each rank is a non-leaf in one tree and leaf in the other.
-- **Latency scales logarithmically**: `O(2 \log_2 N)` hops.
+- **Latency scales logarithmically**: `O(2 log_2 N)` hops.
 - ❌ Slightly lower bandwidth utilization than Ring for large messages.
 - ✅ Ideal when N is huge (hundreds of GPUs) or tensor is a small scalar/control message.
 
@@ -59,13 +59,9 @@ When you read a Megatron performance paper claiming "52% MFU on 1024 H100s", wha
 
 ### 3.2.1 Definitions
 
-```text
-MFU = (Analytic FLOPs per Step / (GPU Peak FLOPs * Step Time * Number of GPUs))
-```
+> `MFU = (Analytic FLOPs per Step / (GPU Peak FLOPs * Step Time * Number of GPUs))`
 
-```text
-HFU = (Actual FLOPs executed (incl. recomputation) / (GPU Peak FLOPs * Step Time * Number of GPUs))
-```
+> `HFU = (Actual FLOPs executed (incl. recomputation) / (GPU Peak FLOPs * Step Time * Number of GPUs))`
 
 **The key distinction**:
 - **MFU** measures how efficiently the cluster trains the model (excludes activation checkpointing overhead).
@@ -74,9 +70,8 @@ HFU = (Actual FLOPs executed (incl. recomputation) / (GPU Peak FLOPs * Step Time
 ### 3.2.2 Computing Analytic FLOPs per Token
 
 For a dense transformer, the dominant cost is matrix multiplications. The standard approximation:
-```text
-FLOPs per Token ≈ 6 Phi + 12 * L * h * d_head * S
-```
+
+> `FLOPs per Token ≈ 6 Phi + 12 * L * h * d_head * S`
 
 Where:
 - Phi = total model parameters
@@ -120,7 +115,6 @@ class _CopyToModelParallelRegion(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         return _reduce(grad_output)   # dist.all_reduce across TP group
-
 
 class _ReduceFromModelParallelRegion(torch.autograd.Function):
     """

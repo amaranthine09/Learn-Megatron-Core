@@ -24,7 +24,6 @@ class _ReduceScatterToSequenceParallelRegion(torch.autograd.Function):
     def backward(ctx, grad_output):
         return _gather_along_first_dim(grad_output)
 
-
 class _AllGatherFromSequenceParallelRegion(torch.autograd.Function):
     """
     Forward: All-gather along sequence dimension (dim 0 in [S, B, H] layout).
@@ -44,10 +43,8 @@ class _AllGatherFromSequenceParallelRegion(torch.autograd.Function):
 
 Notice the symmetry between forward and backward passes:
 
-```text
-Forward: Reduce-Scatter <=> Backward: All-Gather
-Forward: All-Gather     <=> Backward: Reduce-Scatter
-```
+> `Forward: Reduce-Scatter <=> Backward: All-Gather`
+> `Forward: All-Gather     <=> Backward: Reduce-Scatter`
 
 Why does this mathematical conjugate relationship exist?
 - When a forward operation **scatters** data to N GPUs, each GPU receives a `(1 / N)`-th slice. In the backward pass, each GPU computes a gradient for its local slice. To reconstruct the gradient with respect to the original unscattered input, the gradients must be **gathered** back together.
@@ -135,9 +132,8 @@ Modern PyTorch (≥ 2.0) `use_reentrant=False` records the forward pass normally
 | **TP + SP + Selective Recomp** | **Minimum possible** | **Minimum possible** | **Identical!** | **`< 3%`** |
 
 **Communication volume equivalence**:
-```text
-2 * ((N-1) / N) * S (All-Reduce) = ((N-1) / N) * S (Reduce-Scatter) + ((N-1) / N) * S (All-Gather)
-```
+
+> `2 * ((N-1) / N) * S (All-Reduce) = ((N-1) / N) * S (Reduce-Scatter) + ((N-1) / N) * S (All-Gather)`
 
 Sequence Parallelism achieves a `(1 / N)` reduction in activation memory for all sequence-length-dependent operations (LayerNorm, Dropout) at zero additional communication cost.
 

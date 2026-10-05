@@ -20,7 +20,6 @@ Megatron uses asynchronous, non-blocking calls with explicit synchronization han
 import torch
 import torch.distributed as dist
 
-
 def p2p_communication(
     tensor_send_next: torch.Tensor | None,
     tensor_send_prev: torch.Tensor | None,

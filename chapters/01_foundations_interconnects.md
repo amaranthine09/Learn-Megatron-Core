@@ -34,7 +34,7 @@ Crucially, **not all communication paths are created equal**. As data moves furt
 | **SRAM (Register / L1)** | On-Die (Inside Streaming Multiprocessor) | `~ 19.0 TB/s` | `~ 1 ns` | Fused Kernels (FlashAttention, SwiGLU) |
 | **HBM3e (GPU VRAM)** | On-Substrate (Stacks around GPU die) | `~ 3.35 - 4.8 TB/s` | `~ 50 - 100 ns` | Local Matrix Multiply (GEMM) |
 | **NVLink 4 / NVLink 5** | Intra-Node (GPU-to-GPU within 1 server) | `~ 900 - 1,800 GB/s` | `~ 0.5 - 1.0 us` | **Tensor Parallelism (TP) & Sequence Parallelism (SP)** |
-| **PCIe Gen 5** | Motherboard Bus (CPU `<= ftrightarrow` GPU / Host RAM) | `~ 64 GB/s` | `~ 2 - 5 us` | CPU Offload (ZeRO-Offload), Checkpoint Saving |
+| **PCIe Gen 5** | Motherboard Bus (CPU `<->` GPU / Host RAM) | `~ 64 GB/s` | `~ 2 - 5 us` | CPU Offload (ZeRO-Offload), Checkpoint Saving |
 | **InfiniBand NDR / RoCE v2** | Inter-Node Network (Cross-Server Cables) | `~ 50 GB/s` (400 Gbps) | `~ 5 - 15 us` | **Pipeline Parallelism (PP) & Data Parallelism (DP)** |
 
 ### 1.1.3 The Golden Rule of Distributed Scaling:
@@ -245,9 +245,8 @@ STEP 3 (Scatter-Reduce Final Step):
 - GPU 3 holds the full sum of chunk 3: `sum(i=0)^3 c[3,i]`
 
 Data transferred per rank during Scatter-Reduce:
-```text
-Data_scatter-reduce = (N - 1) * (S / N)
-```
+
+> `Data_scatter-reduce = (N - 1) * (S / N)`
 
 ---
 
@@ -262,17 +261,15 @@ In the All-Gather phase, the exact same ring communication pattern occurs, but *
 After `N-1 = 3` steps of All-Gather, **all 4 GPUs hold the identical, fully reduced tensor** `[ sum c_0, sum c_1, sum c_2, sum c_3 ]`!
 
 Data transferred per rank during All-Gather:
-```text
-Data_all-gather = (N - 1) * (S / N)
-```
+
+> `Data_all-gather = (N - 1) * (S / N)`
 
 ---
 
 #### 1.4.3.4 The Master Volume Equation and Bandwidth Bound
 Summing both phases, the total data sent (and received) by each GPU is:
-```text
-Total Transferred Volume per Rank = 2 * (((N - 1) / N)) * S
-```
+
+> `Total Transferred Volume per Rank = 2 * (((N - 1) / N)) * S`
 
 ```
 As cluster size N grows:
@@ -291,9 +288,7 @@ As cluster size N grows:
 #### 1.4.4.1 Network Latency vs Bandwidth: The alpha-beta Model
 The time taken to run Ring All-Reduce is formally expressed by the Hockney communication model:
 
-```text
-Time_Ring = 2(N - 1)alpha + 2(((N - 1) / N))Sbeta
-```
+> `Time_Ring = 2(N - 1)alpha + 2(((N - 1) / N))Sbeta`
 
 Where:
 - alpha: **Latency / Network Message Setup Time** (time to negotiate and initiate a packet transfer, typically 1 us on NVLink, 5 - 10 us on InfiniBand).
@@ -306,7 +301,7 @@ Notice what this equation reveals:
 
 ### 1.4.5 Tree All-Reduce vs Ring All-Reduce in NCCL:
 Because of the latency term `2(N-1)alpha`, NVIDIA's collective library (NCCL) does **not** always use a Ring:
-- **Double Binary Tree All-Reduce**: Arranges GPUs into two binary trees. The latency scales logarithmically: `O(\log N * alpha)` rather than `O(N * alpha)`. NCCL uses Tree algorithms for **small payloads** or **very high node counts**.
+- **Double Binary Tree All-Reduce**: Arranges GPUs into two binary trees. The latency scales logarithmically: `O(log N * alpha)` rather than `O(N * alpha)`. NCCL uses Tree algorithms for **small payloads** or **very high node counts**.
 - **Ring All-Reduce**: Reaches optimal bandwidth utilization (`((N-1) / N) -> 1`). NCCL uses Ring for **large tensor payloads** (e.g., gradient buckets `>25 MB`).
 - **NVLS (NVLink SHARP)**: In modern H100/B200 servers, the NVSwitch hardware contains an on-chip arithmetic logic unit (ALU). The switch itself performs the addition at line-rate in hardware, bypassing the ring completely!
 
@@ -317,9 +312,8 @@ Because of the latency term `2(N-1)alpha`, NVIDIA's collective library (NCCL) do
 ### 1.4.6 Reduce-Scatter & All-Gather (The Dual Primitives)
 
 Notice that Ring All-Reduce is literally:
-```text
-All-Reduce(X) = All-Gather(Reduce-Scatter(X))
-```
+
+> `All-Reduce(X) = All-Gather(Reduce-Scatter(X))`
 
 - **`reduce_scatter`**:
   Takes an unreduced tensor of size S on each rank, sums them across all ranks, and scatters the result so rank i holds a reduced slice of size `S/N`.
