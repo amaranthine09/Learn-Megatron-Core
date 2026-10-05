@@ -16,8 +16,8 @@ FP4 (E2M1): [ S | E E | M ]  <- 1 sign, 2 exponent, 1 mantissa bit
 NVFP4:      Uses microscaling (block-wise shared scaling factors)
 ```
 
-- **Microscaling (MX)**: Instead of a single global scale, each block of $N_g = 32$ elements shares one FP8 scaling factor, providing fine-grained dynamic range while keeping matrix operations in 4-bit.
-- **Throughput**: $4\times$ more effective TFLOPS compared to BF16 on Blackwell.
+- **Microscaling (MX)**: Instead of a single global scale, each block of `N_g = 32` elements shares one FP8 scaling factor, providing fine-grained dynamic range while keeping matrix operations in 4-bit.
+- **Throughput**: `4 *` more effective TFLOPS compared to BF16 on Blackwell.
 
 > [!IMPORTANT]
 > **Production Status: NVFP4 vs FP8**:
@@ -29,12 +29,12 @@ NVFP4:      Uses microscaling (block-wise shared scaling factors)
 ### 3.1.2 Dynamic Context Parallelism (Dynamic-CP)
 
 Standard CP ([Context Parallelism & MoE](/context-parallelism/)) uses a fixed CP size for the entire training run. This is wasteful for variable-length sequence datasets (e.g., SFT or RLHF):
-- A batch containing one $128\text{k}$ token sequence requires $\text{CP} = 16$.
-- The next batch with a $4\text{k}$ max sequence wastes $15/16$ of CP resources!
+- A batch containing one 128k token sequence requires `CP = 16`.
+- The next batch with a 4k max sequence wastes `15/16` of CP resources!
 
-**Dynamic-CP** pre-builds CP groups for every power-of-2 CP size $\{1, 2, 4, 8, 16, ...\}$ at initialization.
+**Dynamic-CP** pre-builds CP groups for every power-of-2 CP size `\{1, 2, 4, 8, 16, ...\}` at initialization.
 For each microbatch, a solver computes the optimal CP size balancing memory and communication cost.
-Achieves **up to $1.48\times$ speedup** on realistic variable-length datasets!
+Achieves **up to `1.48 *` speedup** on realistic variable-length datasets!
 
 ```python
 from megatron.core.transformer.transformer_config import TransformerConfig
@@ -103,10 +103,14 @@ def apply_fsdp2_to_transformer_layers(model: torch.nn.Module, dp_mesh):
 ### 3.1.5 Production Model FLOPs Utilization (MFU) Calculator
 
 A primary metric for evaluating any distributed training cluster is **MFU (Model FLOPs Utilization)**:
-$$\text{MFU} = \frac{\text{Actual Achieved FLOPs / Step}}{\text{Hardware Theoretical Peak FLOPs / Step}}$$
+```text
+MFU = ((Actual Achieved FLOPs / Step) / (Hardware Theoretical Peak FLOPs / Step))
+```
 
 Where total training FLOPs per token for a decoder-only Transformer with activation checkpointing is:
-$$\text{FLOPs / token} \approx 6\Phi + 12 \times L \times h \times d_{\text{head}} \times S$$
+```text
+FLOPs / token ≈ 6Phi + 12 * L * h * d_head * S
+```
 
 ```python
 """
@@ -186,11 +190,11 @@ The following battle-tested diagnostic table resolves the most frequent failure 
 
 | Failure Mode / Bug | Underlying Root Cause | Observable Diagnostic Symptom | Production M-Core Fix |
 | :--- | :--- | :--- | :--- |
-| **FP8 Delayed Scaling Amax Mismatch** | History buffer window too short ($N < 8$) during rapid learning rate warmup or gradient spikes. | Sudden `NaN` loss or gradient underflow in backward pass (E5M2 clipping). | Set `amax_history_len=16`, `margin=0`, and enforce a 200-step pure BF16 warmup before enabling `te.fp8_autocast`. |
+| **FP8 Delayed Scaling Amax Mismatch** | History buffer window too short (`N < 8`) during rapid learning rate warmup or gradient spikes. | Sudden `NaN` loss or gradient underflow in backward pass (E5M2 clipping). | Set `amax_history_len=16`, `margin=0`, and enforce a 200-step pure BF16 warmup before enabling `te.fp8_autocast`. |
 | **Comm-Compute Stream Desynchronization** | Async CUDA communication stream executed without explicit `compute_stream.wait_stream(comm_stream)` barrier. | Silent numerical corruption or non-deterministic loss trajectories between identical seeds. | Enforce strict stream event synchronization at every micro-tile boundary (`torch.cuda.Event.record()` / `wait()`). |
 | **Muon 1D Parameter Crash** | Passing 1D LayerNorm scales, biases, or embedding tables into Muon's 2D Newton-Schulz polar operator. | `ValueError: Muon only supports >=2D matrices (Linear weights).` | Use M-Core hybrid optimizer routing: route 2D GEMM weights to Muon; route 1D biases, norms, and embeddings to AdamW. |
 | **Distributed Checkpoint Resharding Mismatch** | Attempting to load a checkpoint across altered TP/PP sizes without unified `ShardedTensor` coordinate metadata. | `KeyError` or shape mismatch `[d0, d1] != [d0', d1']` on `dist_checkpointing.load()`. | Use native `megatron.core.dist_checkpointing` with `fully_parallel_load=True`, which dynamically recalculates slice intersections. |
-| **Dynamic-CP Microbatch Divisibility Error** | Variable-length sequence in Dynamic-CP batch not divisible by $\text{CP} \times \text{TP}$ head count. | NCCL assertion error `size mismatch in P2P Ring Attention buffer exchange`. | Pad each sequence in the data collator to the nearest integer multiple of $\text{CP} \times \text{TP} \times \text{kv\_channels}$. |
+| **Dynamic-CP Microbatch Divisibility Error** | Variable-length sequence in Dynamic-CP batch not divisible by `CP * TP` head count. | NCCL assertion error `size mismatch in P2P Ring Attention buffer exchange`. | Pad each sequence in the data collator to the nearest integer multiple of `CP * TP * kv\_channels`. |
 | **Transformer Engine Spec Recursion Error** | Mixing legacy PyTorch submodules with `TELinear` without matching `TransformerLayerSubmodules` signature. | `TypeError: Unexpected keyword argument 'config'` during layer initialization. | Always generate submodules via `ModuleSpec` with explicit `submodules=TransformerLayerSubmodules(...)`. |
 
 ---

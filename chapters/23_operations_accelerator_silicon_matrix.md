@@ -34,10 +34,10 @@ While intra-node GEMM communication travels across ultra-fast NVLink, **Pipeline
 
 | Interconnect Generation | Raw Port Speed | Unidirectional Bandwidth | Typical End-to-End Latency | In-Network Computing Engine |
 | :--- | :--- | :--- | :--- | :--- |
-| **InfiniBand HDR** (2019) | 200 Gbps | $25\text{ GB/s}$ | $\sim 1.0\ \mu\text{s}$ | SHARP v1 (FP16 Reductions) |
-| **InfiniBand NDR** (2022) | 400 Gbps | $50\text{ GB/s}$ | $\sim 0.6\ \mu\text{s}$ | SHARP v2 (BF16 & FP32 Reductions) |
-| **InfiniBand XDR** (2025) | 800 Gbps | $100\text{ GB/s}$ | $\sim 0.35\ \mu\text{s}$ | SHARP v3 (Hardware Ring Acceleration) |
-| **RoCE v2 (400G / 800G)** | 400–800 Gbps | $50 - 100\text{ GB/s}$ | $\sim 1.2 - 2.5\ \mu\text{s}$ | Software / Switch ASIC dependent |
+| **InfiniBand HDR** (2019) | 200 Gbps | `25 GB/s` | `~ 1.0 us` | SHARP v1 (FP16 Reductions) |
+| **InfiniBand NDR** (2022) | 400 Gbps | `50 GB/s` | `~ 0.6 us` | SHARP v2 (BF16 & FP32 Reductions) |
+| **InfiniBand XDR** (2025) | 800 Gbps | `100 GB/s` | `~ 0.35 us` | SHARP v3 (Hardware Ring Acceleration) |
+| **RoCE v2 (400G / 800G)** | 400–800 Gbps | `50 - 100 GB/s` | `~ 1.2 - 2.5 us` | Software / Switch ASIC dependent |
 
 > [!IMPORTANT]
 > **RoCE v2 vs InfiniBand in Production Clusters**:
@@ -48,11 +48,11 @@ While intra-node GEMM communication travels across ultra-fast NVLink, **Pipeline
 ## 3. Superchip & Rack-Scale Paradigm Shifts
 
 ### 3.1 Blackwell GB200 NVL72: Rewriting the Rules of 3D Parallelism
-Historically, **Tensor Parallelism (TP) was strictly capped at $N = 8$** because an HGX server contains exactly 8 GPUs connected via NVSwitch. Crossing into another server over InfiniBand introduced a $10\times$ bandwidth drop ($900\text{ GB/s} \to 50\text{ GB/s}$), rendering $\text{TP} > 8$ inefficient.
+Historically, **Tensor Parallelism (TP) was strictly capped at `N = 8`** because an HGX server contains exactly 8 GPUs connected via NVSwitch. Crossing into another server over InfiniBand introduced a `10 *` bandwidth drop (`900 GB/s -> 50 GB/s`), rendering `TP > 8` inefficient.
 
 The **NVIDIA GB200 NVL72** completely shatters this constraint:
 - A single liquid-cooled rack integrates **72 Blackwell GPUs and 36 Grace CPUs**.
-- The entire 72-GPU rack is wired into a massive **single NVLink 5 crossbar switch fabric** with $130\text{ TB/s}$ of aggregate bi-directional bisection bandwidth!
+- The entire 72-GPU rack is wired into a massive **single NVLink 5 crossbar switch fabric** with `130 TB/s` of aggregate bi-directional bisection bandwidth!
 
 ```
                   GB200 NVL72 Unified NVLink Domain (72 GPUs)
@@ -69,16 +69,16 @@ The **NVIDIA GB200 NVL72** completely shatters this constraint:
 ```
 
 #### 3.1.1 What This Means for Megatron Core Architecture:
-1. **$\text{TP} = 16 \text{ or } 32$ without InfiniBand Penalties**: Giant models ($405\text{B}+$ parameters) can split attention heads across 16 or 32 GPUs without paying any inter-node network latency penalty!
-2. **Context Parallelism ($\text{CP} = 72$) Inside One Rack**: Ring Attention can pass $1\text{M}+$ token contexts through all 72 GPUs at pure NVLink speeds ($1{,}800\text{ GB/s}$), completely eliminating network communication bottlenecks.
-3. **Drastic Pipeline Bubble Reduction**: Because TP and CP absorb more GPUs inside the rack, Pipeline Parallelism can be reduced from $p = 16$ down to $p = 2$ or $p = 4$, drastically shrinking the pipeline bubble fraction from $25\%$ down to $< 5\%$!
+1. **`TP = 16 or 32` without InfiniBand Penalties**: Giant models (`405B+` parameters) can split attention heads across 16 or 32 GPUs without paying any inter-node network latency penalty!
+2. **Context Parallelism (`CP = 72`) Inside One Rack**: Ring Attention can pass `1M+` token contexts through all 72 GPUs at pure NVLink speeds (`1,800 GB/s`), completely eliminating network communication bottlenecks.
+3. **Drastic Pipeline Bubble Reduction**: Because TP and CP absorb more GPUs inside the rack, Pipeline Parallelism can be reduced from `p = 16` down to `p = 2` or `p = 4`, drastically shrinking the pipeline bubble fraction from 25% down to `< 5%`!
 
 ---
 
 ### 3.2 Grace-Hopper (GH200) NVLink-C2C Coherent Interconnect
-In traditional architectures, the CPU and GPU communicate across a PCIe Gen 5 slot ($64\text{ GB/s}$).
-The **GH200 NVLink-C2C (Chip-to-Chip)** connects the 72-core ARM Grace CPU directly to the Hopper GPU at **$900\text{ GB/s}$ bidirectional bandwidth** with hardware cache coherency:
-- The GPU can directly read and write to $480\text{ GB}$ of fast LPDDR5X CPU system memory as if it were local VRAM.
+In traditional architectures, the CPU and GPU communicate across a PCIe Gen 5 slot (`64 GB/s`).
+The **GH200 NVLink-C2C (Chip-to-Chip)** connects the 72-core ARM Grace CPU directly to the Hopper GPU at **`900 GB/s` bidirectional bandwidth** with hardware cache coherency:
+- The GPU can directly read and write to 480 GB of fast LPDDR5X CPU system memory as if it were local VRAM.
 - Enables near-instantaneous asynchronous checkpointing and zero-copy data loader prefetching.
 
 ---
@@ -89,8 +89,8 @@ The table below provides a rigorous comparison between the primary distributed t
 
 | Feature / Dimension | NVIDIA Megatron Core (M-Core) | DeepSpeed (Microsoft) | PyTorch FSDP2 (Native Meta) |
 | :--- | :--- | :--- | :--- |
-| **Core Architecture Philosophy** | Composable 5D Grid (TP $\times$ SP $\times$ PP $\times$ DP $\times$ CP $\times$ EP) | ZeRO Memory Sharding Hierarchy (ZeRO 1/2/3) + Extensions | Per-Module Fully Sharded Data Parallel (`fully_shard`) |
-| **Tensor Parallelism (TP)** | Native Column/Row GEMMs with autograd conjugate $f/g$ operators | Supported via Megatron integration | Relies on PyTorch DTensor (`torch.distributed.tensor`) |
+| **Core Architecture Philosophy** | Composable 5D Grid (TP `*` SP `*` PP `*` DP `*` CP `*` EP) | ZeRO Memory Sharding Hierarchy (ZeRO 1/2/3) + Extensions | Per-Module Fully Sharded Data Parallel (`fully_shard`) |
+| **Tensor Parallelism (TP)** | Native Column/Row GEMMs with autograd conjugate `f/g` operators | Supported via Megatron integration | Relies on PyTorch DTensor (`torch.distributed.tensor`) |
 | **Sequence Parallelism (SP)** | RS + AG over LayerNorm with zero comm overhead | Supported via Ulysses / Megatron | Supported via DTensor sequence sharding |
 | **Pipeline Parallelism (PP)** | 1F1B, Interleaved 1F1B, DualPipe (DeepSeek-V3) | PipelineEngine with 1F1B | Experimental via `torch.distributed.pipelining` |
 | **Context Parallelism (CP)** | Ring Attention (Online Softmax) + Zigzag causal balance | DeepSpeed-Ulysses (All-to-All head sharding) | Ring Attention via torch.distributed |

@@ -12,16 +12,16 @@ One of the most common misconceptions is that NCCL always uses Ring All-Reduce. 
 #### 3.1.1.1 Algorithm A: Ring All-Reduce (Bandwidth-Optimal)
 Best for **large tensors** (gradient buckets, embedding tables):
 - GPUs form a logical ring; each sends & receives from only its neighbours.
-- Communication volume: $2 \left(\frac{N-1}{N}\right) S$ bytes per rank.
-- **Latency scales linearly** with $N$: $\mathcal{O}(N)$ hops.
-- ✅ Ideal when $N$ is small and $S$ is large (typical for DP gradient sync).
+- Communication volume: `2 (((N-1) / N)) S` bytes per rank.
+- **Latency scales linearly** with N: `O(N)` hops.
+- ✅ Ideal when N is small and S is large (typical for DP gradient sync).
 
 #### 3.1.1.2 Algorithm B: Double Binary Tree (Latency-Optimal)
-Best for **small tensors** or **very large** $N$:
+Best for **small tensors** or **very large** N:
 - Two complementary binary trees; each rank is a non-leaf in one tree and leaf in the other.
-- **Latency scales logarithmically**: $\mathcal{O}(2 \log_2 N)$ hops.
+- **Latency scales logarithmically**: `O(2 \log_2 N)` hops.
 - ❌ Slightly lower bandwidth utilization than Ring for large messages.
-- ✅ Ideal when $N$ is huge (hundreds of GPUs) or tensor is a small scalar/control message.
+- ✅ Ideal when N is huge (hundreds of GPUs) or tensor is a small scalar/control message.
 
 #### 3.1.1.3 Algorithm C: NVLS (NVLink SHARP — Hopper+ Exclusive)
 - **Reductions happen physically inside the NVSwitch fabric!** No data ever traverses individual NVLink lanes redundantly.
@@ -53,15 +53,19 @@ For every dist.all_reduce(tensor) call:
 
 ## 3.2. Model FLOPs Utilization (MFU) & Hardware FLOPs Utilization (HFU)
 
-When you read a Megatron performance paper claiming "$52\%$ MFU on 1024 H100s", what exactly does that mean?
+When you read a Megatron performance paper claiming "52% MFU on 1024 H100s", what exactly does that mean?
 
 **MFU and HFU are the standard metrics** for measuring how efficiently you are using expensive GPU hardware.
 
 ### 3.2.1 Definitions
 
-$$\text{MFU} = \frac{\text{Analytic FLOPs per Step}}{\text{GPU Peak FLOPs} \times \text{Step Time} \times \text{Number of GPUs}}$$
+```text
+MFU = (Analytic FLOPs per Step / (GPU Peak FLOPs * Step Time * Number of GPUs))
+```
 
-$$\text{HFU} = \frac{\text{Actual FLOPs executed (incl. recomputation)}}{\text{GPU Peak FLOPs} \times \text{Step Time} \times \text{Number of GPUs}}$$
+```text
+HFU = (Actual FLOPs executed (incl. recomputation) / (GPU Peak FLOPs * Step Time * Number of GPUs))
+```
 
 **The key distinction**:
 - **MFU** measures how efficiently the cluster trains the model (excludes activation checkpointing overhead).
@@ -70,16 +74,18 @@ $$\text{HFU} = \frac{\text{Actual FLOPs executed (incl. recomputation)}}{\text{G
 ### 3.2.2 Computing Analytic FLOPs per Token
 
 For a dense transformer, the dominant cost is matrix multiplications. The standard approximation:
-$$\text{FLOPs per Token} \approx 6 \Phi + 12 \times L \times h \times d_{head} \times S$$
+```text
+FLOPs per Token ≈ 6 Phi + 12 * L * h * d_head * S
+```
 
 Where:
-- $\Phi$ = total model parameters
-- $L$ = number of layers
-- $h$ = number of attention heads
-- $d_{head}$ = head dimension ($H / h$)
-- $S$ = sequence length
-- The $6\Phi$ term covers: forward pass $\approx 2\Phi$ + backward pass $\approx 4\Phi$ (backward is $2\times$ forward cost because it computes both $\partial L / \partial W$ and $\partial L / \partial X$).
-- The $12 L h d_{head} S$ term covers the $O(S^2)$ attention computation.
+- Phi = total model parameters
+- L = number of layers
+- h = number of attention heads
+- d_head = head dimension (`H / h`)
+- S = sequence length
+- The 6Phi term covers: forward pass `≈ 2Phi` + backward pass `≈ 4Phi` (backward is `2 *` forward cost because it computes both `d L / d W` and `d L / d X`).
+- The `12 L h d_head S` term covers the `O(S^2)` attention computation.
 
 ### 3.2.3 Practical MFU Benchmarks (Reference)
 
@@ -90,7 +96,7 @@ Where:
 | H100 SXM | FP8 | 45–58% | >65% |
 
 > [!NOTE]
-> The ~$45\%$ gap from 100% is not wasted computation — it is the overhead of: network communication (TP all-reduces, DP reduce-scatter), pipeline bubbles, kernel launch overhead, and CUDA stream synchronization. Megatron's comm-compute overlap closes this gap significantly.
+> The ~45% gap from 100% is not wasted computation — it is the overhead of: network communication (TP all-reduces, DP reduce-scatter), pipeline bubbles, kernel launch overhead, and CUDA stream synchronization. Megatron's comm-compute overlap closes this gap significantly.
 
 ---
 
@@ -145,7 +151,7 @@ Here are the most frequently encountered bugs when writing distributed PyTorch c
 | **Non-Contiguous Tensor** | `RuntimeError: Tensor must be contiguous` | Transposed or sliced tensor passed to collective | Add `.contiguous()` before collective call |
 | **Deadlock** | Job hangs forever | One rank called a collective the other didn't | Ensure all ranks in a group call the same collective in the same order |
 | **NCCL Timeout** | `NCCL Watchdog: Timeout` | One rank crashes or diverges mid-training | Check all ranks are alive; reduce `NCCL_TIMEOUT` to catch earlier |
-| **Gradient Leakage (TP)** | Loss diverges after a few steps | Bias added $N$ times in RowParallelLinear | Add bias after All-Reduce, not inside the partitioned GEMM |
+| **Gradient Leakage (TP)** | Loss diverges after a few steps | Bias added N times in RowParallelLinear | Add bias after All-Reduce, not inside the partitioned GEMM |
 | **Rank 0 Bottleneck** | Very slow All-Reduce | Using `dist.reduce()` instead of `dist.all_reduce()` | `reduce()` sends everything to Rank 0; use `all_reduce()` for training |
 | **Stale Grads (DP)** | NaN gradients after resume | Optimizer step ran before gradient reduction completed | Ensure `dist.barrier()` or `req.wait()` is called before `optimizer.step()` |
 
@@ -155,7 +161,7 @@ Here are the most frequently encountered bugs when writing distributed PyTorch c
 
 In this book, we established:
 1. The hardware hierarchy and why communication cost dominates scaling decisions.
-2. The mathematics of Ring All-Reduce: transfer volume is strictly bounded to $2 \left(\frac{N-1}{N}\right) S$ bytes.
+2. The mathematics of Ring All-Reduce: transfer volume is strictly bounded to `2 (((N-1) / N)) S` bytes.
 3. How `reduce_scatter` and `all_gather` compose the fundamental building blocks of modern distributed training.
 4. The conjugate relationship between forward and backward autograd passes.
 

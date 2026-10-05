@@ -44,14 +44,14 @@ class _AllGatherFromSequenceParallelRegion(torch.autograd.Function):
 
 Notice the symmetry between forward and backward passes:
 
-$$\begin{aligned}
-\text{Forward: Reduce-Scatter} &\iff \text{Backward: All-Gather} \\
-\text{Forward: All-Gather} &\iff \text{Backward: Reduce-Scatter}
-\end{aligned}$$
+```text
+Forward: Reduce-Scatter <=> Backward: All-Gather
+Forward: All-Gather     <=> Backward: Reduce-Scatter
+```
 
 Why does this mathematical conjugate relationship exist?
-- When a forward operation **scatters** data to $N$ GPUs, each GPU receives a $\frac{1}{N}$-th slice. In the backward pass, each GPU computes a gradient for its local slice. To reconstruct the gradient with respect to the original unscattered input, the gradients must be **gathered** back together.
-- When a forward operation **gathers** data from $N$ GPUs to form a full tensor, every GPU receives a copy of the full tensor. In the backward pass, every GPU computes a gradient on the full tensor. To reconstruct the gradient with respect to each local input slice, the gradients must be **summed across ranks and scattered**.
+- When a forward operation **scatters** data to N GPUs, each GPU receives a `(1 / N)`-th slice. In the backward pass, each GPU computes a gradient for its local slice. To reconstruct the gradient with respect to the original unscattered input, the gradients must be **gathered** back together.
+- When a forward operation **gathers** data from N GPUs to form a full tensor, every GPU receives a copy of the full tensor. In the backward pass, every GPU computes a gradient on the full tensor. To reconstruct the gradient with respect to each local input slice, the gradients must be **summed across ranks and scattered**.
 
 ---
 
@@ -129,15 +129,17 @@ Modern PyTorch (≥ 2.0) `use_reentrant=False` records the forward pass normally
 
 | Strategy | LayerNorm Activation Memory | Dropout Activation Memory | Communication per Block | Compute Overhead |
 |---|---|---|---|---|
-| **Pure TP (v1)** | Full $B \times S \times H$ | Full $B \times S \times H$ | 2 All-Reduces | $0\%$ |
-| **TP + Full Recomp** | Minimal | Minimal | 2 All-Reduces | $+33\%$ |
-| **TP + Sequence Parallel (v3)** | $\frac{B \times S \times H}{N}$ | $\frac{B \times S \times H}{N}$ | 2 RS + 2 AG (Identical!) | $0\%$ |
-| **TP + SP + Selective Recomp** | **Minimum possible** | **Minimum possible** | **Identical!** | **$< 3\%$** |
+| **Pure TP (v1)** | Full `B * S * H` | Full `B * S * H` | 2 All-Reduces | 0% |
+| **TP + Full Recomp** | Minimal | Minimal | 2 All-Reduces | +33% |
+| **TP + Sequence Parallel (v3)** | `((B * S * H) / N)` | `((B * S * H) / N)` | 2 RS + 2 AG (Identical!) | 0% |
+| **TP + SP + Selective Recomp** | **Minimum possible** | **Minimum possible** | **Identical!** | **`< 3%`** |
 
 **Communication volume equivalence**:
-$$\underbrace{2 \cdot \frac{N-1}{N} \cdot S}_{\text{All-Reduce}} = \underbrace{\frac{N-1}{N} \cdot S}_{\text{Reduce-Scatter}} + \underbrace{\frac{N-1}{N} \cdot S}_{\text{All-Gather}}$$
+```text
+2 * ((N-1) / N) * S (All-Reduce) = ((N-1) / N) * S (Reduce-Scatter) + ((N-1) / N) * S (All-Gather)
+```
 
-Sequence Parallelism achieves a $\frac{1}{N}$ reduction in activation memory for all sequence-length-dependent operations (LayerNorm, Dropout) at zero additional communication cost.
+Sequence Parallelism achieves a `(1 / N)` reduction in activation memory for all sequence-length-dependent operations (LayerNorm, Dropout) at zero additional communication cost.
 
 ---
 
@@ -145,11 +147,11 @@ Sequence Parallelism achieves a $\frac{1}{N}$ reduction in activation memory for
 
 | Bug / Pitfall | Physical Symptom | Underlying Root Cause | Battle-Tested Fix |
 |---|---|---|---|
-| **Reentrant Autograd Deadlock** | Distributed job hangs during backward pass | Using `torch.utils.checkpoint` with legacy `use_reentrant=True` alongside collective functions | Always pass `use_reentrant=False` in PyTorch $\ge 2.0$ |
-| **Indivisible Sequence Length** | `AssertionError: S % TP != 0` | Sequence length $S=4{,}097$ not evenly divisible by TP world size $N=8$ | Pad input sequence length to the nearest multiple of $N$ before embedding |
+| **Reentrant Autograd Deadlock** | Distributed job hangs during backward pass | Using `torch.utils.checkpoint` with legacy `use_reentrant=True` alongside collective functions | Always pass `use_reentrant=False` in PyTorch `>= 2.0` |
+| **Indivisible Sequence Length** | `AssertionError: S % TP != 0` | Sequence length `S=4,097` not evenly divisible by TP world size `N=8` | Pad input sequence length to the nearest multiple of N before embedding |
 | **All-Gather Buffer Overwrite** | Silent gradient corruption | Output buffer in `_AllGather` points to an in-place mutated activation | Ensure `tensor_list = [torch.empty_like(...) ...]` allocates fresh non-overlapping memory |
-| **Double Sharding Trap** | Tensor shapes shrink to $S / N^2$ | Applying Sequence Parallel Reduce-Scatter to an already sequence-parallel tensor | Strictly apply Reduce-Scatter only at the exit of `RowParallelLinear` |
-| **LayerNorm Comm Leaks** | Extremely slow LayerNorm forward | Calling collective communication inside LayerNorm | LayerNorm operates purely on the last dimension $H$; ensure zero collectives are executed inside normalization |
+| **Double Sharding Trap** | Tensor shapes shrink to `S / N^2` | Applying Sequence Parallel Reduce-Scatter to an already sequence-parallel tensor | Strictly apply Reduce-Scatter only at the exit of `RowParallelLinear` |
+| **LayerNorm Comm Leaks** | Extremely slow LayerNorm forward | Calling collective communication inside LayerNorm | LayerNorm operates purely on the last dimension H; ensure zero collectives are executed inside normalization |
 
 ---
 

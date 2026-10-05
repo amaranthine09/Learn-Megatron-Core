@@ -13,7 +13,7 @@ In real LLM systems, we don't just have one flat communication ring. We use **3D
 ### 2.1.1 PyTorch Process Groups
 A `ProcessGroup` in PyTorch defines a subset of ranks that can perform collective operations together.
 
-For example, consider an 8-GPU setup with $\text{TP} = 2$, $\text{DP} = 4$:
+For example, consider an 8-GPU setup with `TP = 2`, `DP = 4`:
 ```
 Global Ranks: [0, 1, 2, 3, 4, 5, 6, 7]
 
@@ -57,12 +57,16 @@ class DistributedOperation(torch.autograd.Function):
 
 ### 2.2.2 The Conjugate Inversion Principle
 Notice what happens during backpropagation:
-- If a forward operation is an **identity** (data passed to $N$ ranks without modification), the gradient accumulated at each rank must be **summed** across all $N$ ranks:
-  $$\text{Forward: Identity} \implies \text{Backward: All-Reduce (Sum)}$$
+- If a forward operation is an **identity** (data passed to N ranks without modification), the gradient accumulated at each rank must be **summed** across all N ranks:
+  ```text
+  Forward: Identity => Backward: All-Reduce (Sum)
+  ```
 - If a forward operation is a **sum** across ranks (combining partial computations), each rank receives the identical upstream gradient during backprop:
-  $$\text{Forward: All-Reduce (Sum)} \implies \text{Backward: Identity}$$
+  ```text
+  Forward: All-Reduce (Sum) => Backward: Identity
+  ```
 
-This is the exact mathematical foundation of Megatron's $f$ and $g$ operators!
+This is the exact mathematical foundation of Megatron's f and g operators!
 
 ---
 
@@ -96,10 +100,10 @@ View B: y = x.t()  (Transpose)
 
 ### 2.3.2 The Silent Collective Communication Trap:
 Why does this distinction matter critically in distributed deep learning?
-Because low-level collective libraries (**NCCL** and **Gloo**) are written in C/C++. They take a raw memory pointer `tensor.data_ptr()` and an element count $N$, and transmit raw consecutive bytes directly over PCIe/NVLink!
+Because low-level collective libraries (**NCCL** and **Gloo**) are written in C/C++. They take a raw memory pointer `tensor.data_ptr()` and an element count N, and transmit raw consecutive bytes directly over PCIe/NVLink!
 
 If you pass a **non-contiguous** tensor (like `y = x.t()`) into `dist.all_reduce(y)`:
-1. NCCL reads $N$ contiguous memory cells starting from `data_ptr()`.
+1. NCCL reads N contiguous memory cells starting from `data_ptr()`.
 2. It will read elements belonging to unrelated rows or even out-of-bounds memory!
 3. PyTorch prevents this by either:
    - Crashing with `RuntimeError: Tensor must be contiguous`.
@@ -114,15 +118,15 @@ If you pass a **non-contiguous** tensor (like `y = x.t()`) into `dist.all_reduce
 In standard C/C++, you allocate memory with `malloc()`, and in CUDA with `cudaMalloc()`.
 However, `cudaMalloc()` is a **synchronous operating system kernel call**:
 - It requires CPU-GPU driver synchronization.
-- It takes $10 - 50\ \mu\text{s}$ per call.
-- If a model allocated memory via `cudaMalloc` on every forward and backward pass, the training step time would increase by $3\times$!
+- It takes 10 - 50 us per call.
+- If a model allocated memory via `cudaMalloc` on every forward and backward pass, the training step time would increase by `3 *`!
 
 To prevent this, PyTorch includes a custom **Caching Allocator**:
 1. When your code first needs memory, PyTorch calls `cudaMalloc` to allocate a **large block (e.g., 20 MB to several GBs)** from the GPU driver.
 2. It subdivides this block internally into two memory pools:
-   - **Small allocation pool** (tensors $< 1\text{ MB}$)
-   - **Large allocation pool** (tensors $\ge 1\text{ MB}$)
-3. When a tensor is deleted in Python (`del tensor`), PyTorch does **NOT** return the memory to the GPU driver! Instead, it retains the memory in its pool cache so that the next tensor allocation is instantaneous ($\sim 0.1\ \mu\text{s}$, pure CPU pointer math).
+   - **Small allocation pool** (tensors `< 1 MB`)
+   - **Large allocation pool** (tensors `>= 1 MB`)
+3. When a tensor is deleted in Python (`del tensor`), PyTorch does **NOT** return the memory to the GPU driver! Instead, it retains the memory in its pool cache so that the next tensor allocation is instantaneous (`~ 0.1 us`, pure CPU pointer math).
 
 ```
                       The Danger of Memory Fragmentation
@@ -140,7 +144,7 @@ To prevent this, PyTorch includes a custom **Caching Allocator**:
 ```
 
 ### 2.3.4 How Megatron Solves Fragmentation:
-In long-running production training runs (spanning weeks or months), fragmentation can cause an **Out-Of-Memory (OOM) crash** even when $30\text{ GB}$ of VRAM appears free in monitoring dashboards!
+In long-running production training runs (spanning weeks or months), fragmentation can cause an **Out-Of-Memory (OOM) crash** even when 30 GB of VRAM appears free in monitoring dashboards!
 Megatron Core prevents this by:
 1. **Static Buffer Pre-Allocation**: Large communication buffers (for gradient reduction and sequence parallel gathering) are allocated once at initialization and reused forever using `torch.empty(..., out=static_buffer)`.
 2. **PyTorch Allocator Configuration**: Setting the environment variable:

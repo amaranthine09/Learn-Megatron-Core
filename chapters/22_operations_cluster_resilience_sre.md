@@ -8,9 +8,11 @@
 ## 1. The Physics of Frontier Training Failures: Mean Time Between Failures (MTBF)
 
 Training a 70B–405B parameter model takes weeks or months across thousands of GPUs. In this regime, **hardware failure is not an anomaly — it is a mathematical certainty**:
-- An individual GPU accelerator has an annual failure rate of $\sim 3\% - 5\%$ (due to HBM3 thermal cycling, voltage regulator drift, or SRAM bit flips).
-- In a cluster of $16{,}384$ accelerators:
-  $$\text{Expected Failures per Day} = \frac{16{,}384 \times 0.04}{365} \approx \mathbf{1.8 \text{ failures per day!}}$$
+- An individual GPU accelerator has an annual failure rate of `~ 3% - 5%` (due to HBM3 thermal cycling, voltage regulator drift, or SRAM bit flips).
+- In a cluster of `16,384` accelerators:
+  ```text
+  Expected Failures per Day = ((16,384 * 0.04) / 365) ≈ 1.8 failures per day!
+  ```
 - Every 12 to 24 hours, an InfiniBand cable drops packets, a GPU throws an uncorrectable double-bit ECC error, or an NVLink bridge fails.
 
 If your training harness crashes and requires manual human intervention to restart, **effective cluster training time drops below 50%**. Production Megatron Core deployments rely on **Elastic Rendezvous**, **Heartbeat Watchdogs**, and **Non-Blocking Distributed Checkpointing**.
@@ -64,7 +66,7 @@ torchrun \
 The most insidious failure in distributed deep learning is the **Silent Deadlock**:
 - GPU 12 experiences an internal kernel freeze or hardware lockup.
 - GPU 13 waits indefinitely for an incoming P2P `irecv`.
-- All $16{,}384$ GPUs sit at 100% power consumption while performing zero work!
+- All `16,384` GPUs sit at 100% power consumption while performing zero work!
 
 To prevent multi-hour deadlocks, production clusters configure **NCCL Heartbeat Watchdogs**:
 
@@ -114,10 +116,10 @@ def register_graceful_shutdown_handlers(save_checkpoint_fn):
 
 ## 5. Non-Blocking Asynchronous Checkpointing
 
-Saving a 70B parameter model checkpoint (over $140\text{ GB}$ of weights and $280\text{ GB}$ of optimizer states) synchronously stalls GPU compute for 3–5 minutes. If checkpoints are saved every 500 steps, **$15\% - 25\%$ of total training time is lost to disk I/O**.
+Saving a 70B parameter model checkpoint (over 140 GB of weights and 280 GB of optimizer states) synchronously stalls GPU compute for 3–5 minutes. If checkpoints are saved every 500 steps, **`15% - 25%` of total training time is lost to disk I/O**.
 
 Megatron Core uses **Non-Blocking Asynchronous Checkpointing**:
-1. **Device-to-Host Asynchronous DMA**: Updated parameter and optimizer shards are copied from GPU HBM into pinned Host CPU RAM in $< 1.5\text{ seconds}$ via PCIe Gen 5 ($64\text{ GB/s}$).
+1. **Device-to-Host Asynchronous DMA**: Updated parameter and optimizer shards are copied from GPU HBM into pinned Host CPU RAM in `< 1.5 seconds` via PCIe Gen 5 (`64 GB/s`).
 2. **Immediate Compute Resumption**: GPU Tensor Cores immediately resume forward passes for the next training iteration!
 3. **Background Host I/O Thread**: A background Python multiprocessing thread streams the pinned host RAM buffers to parallel distributed storage (Lustre / Ceph / Amazon S3) asynchronously without blocking CUDA streams.
 

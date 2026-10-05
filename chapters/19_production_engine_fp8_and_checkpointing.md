@@ -6,8 +6,8 @@
 ## 2.1. FP8 Mixed Precision Training
 
 Modern accelerators (NVIDIA Hopper H100, Blackwell B200) feature **FP8 Tensor Cores**, doubling throughput over FP16:
-- **FP16 / BF16**: $\sim 989\text{ TFLOPs}$ (H100 SXM)
-- **FP8**: $\sim 1{,}978\text{ TFLOPs}$ (H100 SXM — **$2\times$ faster!**)
+- **FP16 / BF16**: `~ 989 TFLOPs` (H100 SXM)
+- **FP8**: `~ 1,978 TFLOPs` (H100 SXM — **`2 *` faster!**)
 
 However, an 8-bit float has only 256 representable numbers! Naive FP8 training instantly causes overflow or underflow.
 
@@ -31,15 +31,19 @@ IEEE 754 defines two distinct 8-bit formats:
 ---
 
 ### 2.1.2 Delayed Scaling Algorithm in M-Core
-To prevent numerical clipping, tensors are scaled dynamically by a scaling factor $S$:
-$$X_{fp8} = \text{clip}\left(\text{round}\left(X \times S\right)\right)$$
+To prevent numerical clipping, tensors are scaled dynamically by a scaling factor S:
+```text
+X_fp8 = clip(round(X * S))
+```
 
-Calculating the optimal scale factor $S = \frac{\text{FP8\_MAX}}{\max(|X|)}$ requires scanning the entire tensor, which introduces memory synchronization stalls.
+Calculating the optimal scale factor `S = (FP8\_MAX / \max(|X|))` requires scanning the entire tensor, which introduces memory synchronization stalls.
 
 M-Core uses **Delayed Scaling**:
-- It maintains a **history buffer** of the maximum absolute values ($\text{amax}$) over the last $N$ iterations (typically $N = 16$).
+- It maintains a **history buffer** of the maximum absolute values (amax) over the last N iterations (typically `N = 16`).
 - The scale factor for the current step is computed using the **historical maximum**:
-  $$S_t = \frac{\text{FP8\_MAX}}{\max(\text{history}_{t-1})}$$
+  ```text
+  S_t = (FP8\_MAX / (\max(history_t-1)))
+  ```
 - This removes all GPU stalls, allowing FP8 matrix multiplies to run at maximum hardware speed!
 
 ```python
@@ -68,7 +72,7 @@ loss.backward()
 
 Saving a 70B or 405B parameter model to disk in a distributed cluster presents severe engineering challenges:
 - In pure PyTorch, gathering the full model to Rank 0 to write `torch.save(model.state_dict())` causes an immediate Host CPU Out-Of-Memory crash.
-- Saving raw per-GPU checkpoints tightly couples the saved file to the specific cluster configuration: if you train on 64 GPUs with $\text{TP}=8, \text{PP}=4$, you **cannot resume on 32 GPUs with $\text{TP}=4, \text{PP}=2$!**
+- Saving raw per-GPU checkpoints tightly couples the saved file to the specific cluster configuration: if you train on 64 GPUs with `TP=8, PP=4`, you **cannot resume on 32 GPUs with `TP=4, PP=2`!**
 
 ### 2.2.1 Megatron Core Sharded State Dict:
 M-Core implements **Fully Reshardable Distributed Checkpointing**:

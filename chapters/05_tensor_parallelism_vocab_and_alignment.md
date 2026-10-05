@@ -5,18 +5,26 @@
 
 ## 2.1. Vocabulary Parallelism & Parallel Cross Entropy
 
-When training language models with massive vocabularies ($V = 32{,}000$ to $256{,}000$), the token embedding table and final language modeling head become major memory bottlenecks:
-$$\text{Params} = V \times H$$
-For $V = 128{,}000$ and $H = 8{,}192$, the embedding matrix alone consumes **$2\text{ GB}$ in FP16**. More critically, computing logits produces a massive activation tensor:
-$$\text{Logits Memory} = B \times T \times V \times 2\text{ bytes}$$
-For $B = 8, T = 4{,}096, V = 128{,}000$, the logits tensor is **$8.4\text{ GB}$ per microbatch**, often triggering Out-Of-Memory (OOM) errors!
+When training language models with massive vocabularies (`V = 32,000` to `256,000`), the token embedding table and final language modeling head become major memory bottlenecks:
+```text
+Params = V * H
+```
+For `V = 128,000` and `H = 8,192`, the embedding matrix alone consumes **2 GB in FP16**. More critically, computing logits produces a massive activation tensor:
+```text
+Logits Memory = B * T * V * 2 bytes
+```
+For `B = 8, T = 4,096, V = 128,000`, the logits tensor is **`8.4 GB` per microbatch**, often triggering Out-Of-Memory (OOM) errors!
 
 ### 2.1.1 `VocabParallelEmbedding`
-We partition the vocabulary dimension across the $N$ ranks:
-$$\text{Vocab Partition Size} = \left\lceil \frac{V}{N} \right\rceil$$
+We partition the vocabulary dimension across the N ranks:
+```text
+Vocab Partition Size = <= ft\lceil (V / N) \right\rceil
+```
 
-Rank $i$ holds token IDs in range:
-$$[\text{start\_idx}_i, \text{end\_idx}_i) = \left[i \times \frac{V}{N}, (i+1) \times \frac{V}{N}\right)$$
+Rank i holds token IDs in range:
+```text
+[start\_idx_i, end\_idx_i) = [i * (V / N), (i+1) * (V / N))
+```
 
 ```
 Token Input Tensor: [ token_id = 45 ]
@@ -89,10 +97,14 @@ class VocabParallelEmbedding(nn.Module):
 ### 2.1.2 `ParallelCrossEntropyLoss`: Softmax Without Gathering Logits
 
 In standard PyTorch, cross-entropy is:
-$$\mathcal{L} = -\log \left(\frac{e^{z_{target}}}{\sum_{j=1}^V e^{z_j}}\right) = -z_{target} + \log \left(\sum_{j=1}^V e^{z_j}\right)$$
+```text
+Loss = -\log ((e^z_target / sum(j=1)^V e^z_j)) = -z_target + \log (sum(j=1)^V e^z_j)
+```
 
-In Megatron, each rank $i$ only computes logits for its local slice of vocab $V_i$:
-$$z_{local} \in \mathbb{R}^{B \times T \times \frac{V}{N}}$$
+In Megatron, each rank i only computes logits for its local slice of vocab V_i:
+```text
+z_local in shape [B * T * (V / N)]
+```
 
 Megatron computes the loss in parallel using **three lightweight All-Reduces on scalars**:
 
@@ -113,7 +125,7 @@ Final Loss:
   Loss = - (z_target - M) + log(S)
 ```
 
-**Memory Saved**: The full $(B \times T \times V)$ tensor is **NEVER materialized in GPU memory**!
+**Memory Saved**: The full `(B * T * V)` tensor is **NEVER materialized in GPU memory**!
 
 ```python
 """
@@ -194,17 +206,23 @@ class ParallelCrossEntropyLoss(nn.Module):
 
 A subtle bug in tensor-parallel implementations occurs in bias handling:
 
-$$Y = X W + b$$
+```text
+Y = X W + b
+```
 
 In RowParallelLinear:
-$$Y = \left(\sum_{i=1}^N X_i W_i\right) + b$$
+```text
+Y = (sum(i=1)^N X_i W_i) + b
+```
 
-If each rank computes $Z_i = X_i W_i + b$, and then performs `All-Reduce(SUM)`, the resulting tensor will be:
-$$\sum_{i=1}^N (X_i W_i + b) = \left(\sum_{i=1}^N X_i W_i\right) + \mathbf{N \times b}$$
-The bias is added $N$ times!
+If each rank computes `Z_i = X_i W_i + b`, and then performs `All-Reduce(SUM)`, the resulting tensor will be:
+```text
+sum(i=1)^N (X_i W_i + b) = (sum(i=1)^N X_i W_i) + N * b
+```
+The bias is added N times!
 
 ### 2.2.1 The Two Correct Fixes:
-1. **Divide bias by $N$**: Add $b/N$ before All-Reduce (introduces floating-point roundoff error).
+1. **Divide bias by N**: Add `b/N` before All-Reduce (introduces floating-point roundoff error).
 2. **Add bias AFTER All-Reduce (Megatron's method)**:
    ```python
    # Compute GEMM without bias
@@ -223,32 +241,36 @@ The bias is added $N$ times!
 Modern LLMs (Llama 3, Mistral, Qwen) use **Grouped Query Attention (GQA)** instead of standard Multi-Head Attention (MHA).
 
 In GQA, query heads and key/value heads have different counts:
-- Query heads: $h_Q$ (e.g., 32)
-- Key/Value heads: $h_{KV}$ (e.g., 8)
-- **Group size**: $G = h_Q / h_{KV}$ (e.g., 4)
+- Query heads: h_Q (e.g., 32)
+- Key/Value heads: h_KV (e.g., 8)
+- **Group size**: `G = h_Q / h_KV` (e.g., 4)
 
-Each KV head is shared across $G$ query heads.
+Each KV head is shared across G query heads.
 
 ### 2.3.1 Why GQA Changes the Tensor Parallel Constraint:
 
-In standard MHA, any $N$ that evenly divides $h$ works:
-$$h \% N = 0$$
+In standard MHA, any N that evenly divides h works:
+```text
+h % N = 0
+```
 
 In GQA, we must also ensure KV heads can be partitioned evenly:
-$$h_{KV} \% N = 0$$
+```text
+h_KV % N = 0
+```
 
-If $h_{KV} = 8$ and $N = 4$, each rank holds $h_Q / N = 8$ query heads and $h_{KV} / N = 2$ KV heads.
+If `h_KV = 8` and `N = 4`, each rank holds `h_Q / N = 8` query heads and `h_KV / N = 2` KV heads.
 
 ### 2.3.2 The Constraint Matrix:
 
-| Config | $h_Q$ | $h_{KV}$ | Max TP | Per-Rank Q Heads | Per-Rank KV Heads |
+| Config | h_Q | h_KV | Max TP | Per-Rank Q Heads | Per-Rank KV Heads |
 |---|---|---|---|---|---|
 | **MHA** | 32 | 32 | 8 (if node has 8) | 4 | 4 |
 | **GQA (G=4)** | 32 | 8 | 8 | 4 | 1 |
 | **MQA** | 32 | 1 | **1** (Cannot TP!) | 32 | 1 |
 
 > [!IMPORTANT]
-> **Multi-Query Attention (MQA)** has exactly **1 KV head**. You **cannot** apply Tensor Parallelism to MQA attention without special all-gather tricks, because there's no KV head to shard! This is why modern production models use GQA (minimum $h_{KV} = N$) rather than MQA.
+> **Multi-Query Attention (MQA)** has exactly **1 KV head**. You **cannot** apply Tensor Parallelism to MQA attention without special all-gather tricks, because there's no KV head to shard! This is why modern production models use GQA (minimum `h_KV = N`) rather than MQA.
 
 ---
 
@@ -257,12 +279,14 @@ If $h_{KV} = 8$ and $N = 4$, each rank holds $h_Q / N = 8$ query heads and $h_{K
 A subtle but critical detail: **weight initialization must be adjusted for TP.**
 
 In a standard single-GPU model, residual projections (attention output projection and MLP FC2) are typically initialized with reduced variance to prevent residual activation blow-up:
-$$\text{Std}(W_{out}) = \frac{0.02}{\sqrt{2 \times L}}$$
+```text
+Std(W_out) = (0.02 / (sqrt(2 * L)))
+```
 
-Where $L$ is the number of transformer layers (the $2L$ accounts for $2$ residual connections per block).
+Where L is the number of transformer layers (the 2L accounts for 2 residual connections per block).
 
-In Megatron with Tensor Parallelism, `RowParallelLinear` projects from $(4H / N) \to H$ instead of $4H \to H$.
-The **fan-in** is $4H/N$ rather than $4H$, which changes the He/Xavier initialization normalization.
+In Megatron with Tensor Parallelism, `RowParallelLinear` projects from `(4H / N) -> H` instead of `4H -> H`.
+The **fan-in** is `4H/N` rather than 4H, which changes the He/Xavier initialization normalization.
 
 Megatron handles this by scaling with respect to the **full un-partitioned fan-in**:
 ```python
@@ -274,7 +298,7 @@ std = math.sqrt(2.0 / in_features_per_partition)
 std = math.sqrt(2.0 / (in_features_global * num_layers_factor))
 ```
 
-Not doing this correctly causes the activation variance to diverge by a factor of $\sqrt{N}$ across GPUs!
+Not doing this correctly causes the activation variance to diverge by a factor of `sqrt(N)` across GPUs!
 
 ---
 
@@ -282,7 +306,7 @@ Not doing this correctly causes the activation variance to diverge by a factor o
 
 Let's trace the complete forward pass of one Transformer block with exact tensor shapes:
 
-**Model Config**: $B=2, S=4, H=8, h=4, d_{head}=2, \text{TP}=2$
+**Model Config**: `B=2, S=4, H=8, h=4, d_head=2, TP=2`
 
 ```
 INPUT: X [B=2, S=4, H=8]  <-- Identical on both Rank 0 and Rank 1
@@ -312,7 +336,7 @@ INPUT: X [B=2, S=4, H=8]  <-- Identical on both Rank 0 and Rank 1
               Y_attn = Z_proj0 + Z_proj1 [2, 4, 8]  <-- Full H=8 on both ranks!
 ```
 
-This shows concretely how the RowParallelLinear output projections `Z_proj0 [2,4,8]` and `Z_proj1 [2,4,8]` are **summed** via All-Reduce to yield the final output. Neither rank holds a partial slice of $H$; both receive the full $H=8$ dimensional vector.
+This shows concretely how the RowParallelLinear output projections `Z_proj0 [2,4,8]` and `Z_proj1 [2,4,8]` are **summed** via All-Reduce to yield the final output. Neither rank holds a partial slice of H; both receive the full `H=8` dimensional vector.
 
 ---
 
@@ -320,14 +344,14 @@ This shows concretely how the RowParallelLinear output projections `Z_proj0 [2,4
 
 | Component | Parallelism Type | Local Dimension | Forward Communication | Backward Communication |
 |---|---|---|---|---|
-| **Token Embedding** | Vocab Parallel | $V/N \times H$ | All-Reduce (SUM) | Identity |
-| **QKV Projection** | Column Parallel | $H \times (3H/N)$ | 0 | All-Reduce (SUM) |
-| **Self-Attention** | Head Partitioned | $h/N \text{ heads}$ | 0 | 0 |
-| **Attention Proj** | Row Parallel | $(H/N) \times H$ | All-Reduce (SUM) | Identity |
-| **MLP FC1** | Column Parallel | $H \times (4H/N)$ | 0 | All-Reduce (SUM) |
-| **MLP GELU** | Local Elementwise | $4H/N$ | 0 | 0 |
-| **MLP FC2** | Row Parallel | $(4H/N) \times H$ | All-Reduce (SUM) | Identity |
-| **LM Head** | Column Parallel | $H \times V/N$ | 0 (or All-Gather) | All-Reduce (SUM) |
+| **Token Embedding** | Vocab Parallel | `V/N * H` | All-Reduce (SUM) | Identity |
+| **QKV Projection** | Column Parallel | `H * (3H/N)` | 0 | All-Reduce (SUM) |
+| **Self-Attention** | Head Partitioned | `h/N heads` | 0 | 0 |
+| **Attention Proj** | Row Parallel | `(H/N) * H` | All-Reduce (SUM) | Identity |
+| **MLP FC1** | Column Parallel | `H * (4H/N)` | 0 | All-Reduce (SUM) |
+| **MLP GELU** | Local Elementwise | `4H/N` | 0 | 0 |
+| **MLP FC2** | Row Parallel | `(4H/N) * H` | All-Reduce (SUM) | Identity |
+| **LM Head** | Column Parallel | `H * V/N` | 0 (or All-Gather) | All-Reduce (SUM) |
 
 ---
 

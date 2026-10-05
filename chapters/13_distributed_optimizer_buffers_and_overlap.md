@@ -80,7 +80,7 @@ Megatron Core solves this through the **`main_grad` pattern** managed by `megatr
            # Free the 16-bit autograd tensor immediately to reclaim VRAM!
            param.grad = None
    ```
-3. **Bucket Dispatch**: As these hooks fire in reverse topological order during backpropagation, a bucket tracker monitors the contiguous buffer. When a bucket fills (e.g., reaches $40\text{ MB}$), an asynchronous `reduce_scatter` launches immediately on a dedicated `comm_stream`, overlapping communication with the backward pass of earlier layers!
+3. **Bucket Dispatch**: As these hooks fire in reverse topological order during backpropagation, a bucket tracker monitors the contiguous buffer. When a bucket fills (e.g., reaches 40 MB), an asynchronous `reduce_scatter` launches immediately on a dedicated `comm_stream`, overlapping communication with the backward pass of earlier layers!
 
 ---
 
@@ -91,11 +91,11 @@ Megatron Core solves this through the **`main_grad` pattern** managed by `megatr
 
 To achieve state-of-the-art Model Flops Utilization (MFU), Megatron Core does not wait for the entire backward pass to finish before starting `reduce_scatter`.
 
-Instead, it divides the model's parameters into **buckets** (typically $40\text{ MB}$ each):
+Instead, it divides the model's parameters into **buckets** (typically 40 MB each):
 1. Parameters are registered in reverse topological order (matching the backward pass).
-2. As backpropagation calculates gradients for Layer $L$, Layer $L-1$, Layer $L-2$, their gradients are accumulated into Bucket $B$.
-3. The instant Bucket $B$'s bytes exceed the threshold, an asynchronous, non-blocking `dist.reduce_scatter` is launched on a dedicated **Communication CUDA Stream** (`comm_stream`).
-4. While the network interface (NIC / InfiniBand HCA) is transmitting Bucket $B$'s gradients across the cluster, the GPU Tensor Cores are actively executing GEMM backprop for Bucket $B-1$ on the Default Compute Stream!
+2. As backpropagation calculates gradients for Layer L, Layer L-1, Layer L-2, their gradients are accumulated into Bucket B.
+3. The instant Bucket B's bytes exceed the threshold, an asynchronous, non-blocking `dist.reduce_scatter` is launched on a dedicated **Communication CUDA Stream** (`comm_stream`).
+4. While the network interface (NIC / InfiniBand HCA) is transmitting Bucket B's gradients across the cluster, the GPU Tensor Cores are actively executing GEMM backprop for Bucket B-1 on the Default Compute Stream!
 
 ```
 Compute Stream:  [ Backprop Layer 3 ]  [ Backprop Layer 2 ]  [ Backprop Layer 1 ]
@@ -169,16 +169,16 @@ class DistributedDataParallel(MegatronModule):
 
 The table below contrasts memory consumption per GPU across model scales and parallelism configurations.
 
-### 2.4.1 70B Parameter Model ($\Phi = 70 \times 10^9$) on 64 GPUs ($D = 64$)
+### 2.4.1 70B Parameter Model (`Phi = 70 * 10^9`) on 64 GPUs (`D = 64`)
 
 | Parallelism Strategy | Weights VRAM | Gradients VRAM | Optimizer VRAM | Total Model State | Feasibility on 80GB H100 |
 |---|---|---|---|---|---|
-| **Standard DDP ($D=64$)** | $140\text{ GB}$ | $140\text{ GB}$ | $840\text{ GB}$ | **$1{,}120\text{ GB}$** | **OOM (14x over limit)** |
-| **ZeRO-1 ($P_{os}, D=64$)** | $140\text{ GB}$ | $140\text{ GB}$ | $\frac{840}{64} = 13.1\text{ GB}$ | **$293.1\text{ GB}$** | **OOM (3.6x over limit)** |
-| **Megatron DistOpt ($P_{g+os}$)** | $140\text{ GB}$ | $\frac{140}{64} = 2.2\text{ GB}$ | $\frac{840}{64} = 13.1\text{ GB}$ | **$155.3\text{ GB}$** | Needs TP=2 or PP=2 |
-| **TP=4 + Megatron DistOpt ($D=16$)**| $\frac{140}{4} = 35\text{ GB}$ | $\frac{140}{4 \times 16} = 2.2\text{ GB}$ | $\frac{840}{4 \times 16} = 13.1\text{ GB}$ | **$50.3\text{ GB}$** | **FITS! ($29.7\text{ GB}$ for Activations)** |
+| **Standard DDP (`D=64`)** | 140 GB | 140 GB | 840 GB | **`1,120 GB`** | **OOM (14x over limit)** |
+| **ZeRO-1 (`P_os, D=64`)** | 140 GB | 140 GB | `(840 / 64) = 13.1 GB` | **`293.1 GB`** | **OOM (3.6x over limit)** |
+| **Megatron DistOpt (`P_{g+os}`)** | 140 GB | `(140 / 64) = 2.2 GB` | `(840 / 64) = 13.1 GB` | **`155.3 GB`** | Needs TP=2 or PP=2 |
+| **TP=4 + Megatron DistOpt (`D=16`)**| `(140 / 4) = 35 GB` | `(140 / (4 * 16)) = 2.2 GB` | `(840 / (4 * 16)) = 13.1 GB` | **`50.3 GB`** | **FITS! (`29.7 GB` for Activations)** |
 
-Combining **Tensor Parallelism ($TP = 4$)** with the **Megatron Distributed Optimizer** brings the static model state down to **$50.3\text{ GB}$**, leaving nearly **$30\text{ GB}$ of high-speed HBM** entirely free for batch activations and long sequence processing!
+Combining **Tensor Parallelism (`TP = 4`)** with the **Megatron Distributed Optimizer** brings the static model state down to **`50.3 GB`**, leaving nearly **30 GB of high-speed HBM** entirely free for batch activations and long sequence processing!
 
 ---
 

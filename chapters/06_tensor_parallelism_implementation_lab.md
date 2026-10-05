@@ -36,7 +36,7 @@ output, bias = col_linear(input_tensor)
 
 ### 3.1.2 RowParallelLinear
 
-Splits the weight matrix along rows (input features). Forward requires All-Reduce via operator `g`. Bias is **always** added after the All-Reduce to avoid $N \times$ bias duplication.
+Splits the weight matrix along rows (input features). Forward requires All-Reduce via operator `g`. Bias is **always** added after the All-Reduce to avoid `N *` bias duplication.
 
 ```python
 from megatron.core.tensor_parallel.layers import RowParallelLinear
@@ -55,7 +55,7 @@ output, bias = row_linear(input_tensor)
 ```
 
 > [!IMPORTANT]
-> **Bias Timing**: Megatron's `RowParallelLinear` internally passes `bias=None` to `F.linear`, fires `dist.all_reduce`, and **then** adds the bias. If the bias is added inside the GEMM before the All-Reduce, it gets summed $N$ times across TP ranks, blowing up activations within ~10 training steps.
+> **Bias Timing**: Megatron's `RowParallelLinear` internally passes `bias=None` to `F.linear`, fires `dist.all_reduce`, and **then** adds the bias. If the bias is added inside the GEMM before the All-Reduce, it gets summed N times across TP ranks, blowing up activations within ~10 training steps.
 
 ---
 
@@ -124,9 +124,9 @@ with get_cuda_rng_tracker().fork():
 
 | Bug / Pitfall | Physical Symptom | Underlying Root Cause | Battle-Tested Fix |
 |---|---|---|---|
-| **$N \times b$ Bias Failure** | Loss explodes to NaN in $<10$ steps | Passing `bias` directly to `F.linear` in `RowParallelLinear` before the All-Reduce | Set `bias=None` in `RowParallelLinear`'s GEMM; add `bias` explicitly **after** `dist.all_reduce()` |
-| **GQA Head Imbalance** | `AssertionError: num_heads % TP != 0` | Attempting to shard 8 KV heads across $\text{TP}=16$ | In Grouped-Query Attention, $h_{\text{KV}}$ must be an integer multiple of $N$; use $\text{TP} \le h_{\text{KV}}$ |
-| **Vocab Parallel Striding Error** | `RuntimeError: input and target shapes do not match` | Target class indices not offset to local partition $[0, V/N)$ | Mask unowned targets with `-100` and subtract `vocab_start_index` before cross-entropy |
+| **`N * b` Bias Failure** | Loss explodes to NaN in `<10` steps | Passing `bias` directly to `F.linear` in `RowParallelLinear` before the All-Reduce | Set `bias=None` in `RowParallelLinear`'s GEMM; add `bias` explicitly **after** `dist.all_reduce()` |
+| **GQA Head Imbalance** | `AssertionError: num_heads % TP != 0` | Attempting to shard 8 KV heads across `TP=16` | In Grouped-Query Attention, h_KV must be an integer multiple of N; use `TP <= h_KV` |
+| **Vocab Parallel Striding Error** | `RuntimeError: input and target shapes do not match` | Target class indices not offset to local partition `[0, V/N)` | Mask unowned targets with `-100` and subtract `vocab_start_index` before cross-entropy |
 | **Duplicate RNG Seeds** | All TP ranks sample identical dropout masks | Using the same random seed across all TP ranks | Use Megatron's `CudaRNGStatesTracker` with distinct per-rank seeds for dropout |
 | **Inconsistent Weight Init** | Output differs across TP ranks on identical inputs | Column/Row parallel weights initialized with different random states | Seed identically for replicated weights, use rank-dependent offsets for partitioned weights |
 

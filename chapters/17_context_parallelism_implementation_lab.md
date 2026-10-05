@@ -39,7 +39,7 @@ The Ring Attention forward pass rotates KV blocks across CP ranks while each ran
 
 ### 3.2.1 Online Softmax Recurrence
 
-Each ring step updates three running accumulators without materializing the full $S \times S$ attention matrix:
+Each ring step updates three running accumulators without materializing the full `S * S` attention matrix:
 
 ```python
 # Incremental update for one rotating KV block
@@ -252,11 +252,11 @@ config = TransformerConfig(
 
 | Bug / Pitfall | Physical Symptom | Underlying Root Cause | Battle-Tested Fix |
 |---|---|---|---|
-| **Softmax Scaling Base Drift** | Attention outputs diverge or produce NaNs | Forgetting to scale past accumulators by $\alpha = e^{m_{\text{old}} - m_{\text{new}}}$ | Always multiply both $l_{\text{old}}$ and $O_{\text{old}}$ by $\alpha$ before adding new KV blocks |
-| **MoE Routing Collapse** | Only 1 or 2 experts receive 100% of tokens | Missing or zero-weighted auxiliary load balancing loss $\mathcal{L}_{\text{aux}}$ | Add Switch Transformer auxiliary loss $\alpha \cdot E \sum f_i P_i$ with coefficient $\alpha \approx 0.01$ |
+| **Softmax Scaling Base Drift** | Attention outputs diverge or produce NaNs | Forgetting to scale past accumulators by `alpha = e^m_old - m_new` | Always multiply both l_old and O_old by alpha before adding new KV blocks |
+| **MoE Routing Collapse** | Only 1 or 2 experts receive 100% of tokens | Missing or zero-weighted auxiliary load balancing loss Loss_aux | Add Switch Transformer auxiliary loss `alpha * E sum f_i P_i` with coefficient `alpha ≈ 0.01` |
 | **All-to-All Buffer Truncation** | `RuntimeError: Split sizes do not match total elements` | Failure to exchange integer send/receive counts before `all_to_all_single` | Execute a lightweight integer `all_to_all_single` on `send_counts` to populate `recv_counts` first |
-| **Causal Ring Idling** | Half the GPUs idling at 0% compute | Using naive contiguous chunks in causal attention instead of Zigzag Striped assignment | Assign paired chunks $(i, 2C - 1 - i)$ to each rank to balance upper/lower triangle computations |
-| **Expert Capacity Overflow** | Tokens silently dropped during peak routing | Top-K routing sends more tokens to an expert than its fixed capacity buffer | Use dropless routing with `moe_pad_expert_input_to_capacity=False` or set capacity factor $\ge 1.25$ |
+| **Causal Ring Idling** | Half the GPUs idling at 0% compute | Using naive contiguous chunks in causal attention instead of Zigzag Striped assignment | Assign paired chunks `(i, 2C - 1 - i)` to each rank to balance upper/lower triangle computations |
+| **Expert Capacity Overflow** | Tokens silently dropped during peak routing | Top-K routing sends more tokens to an expert than its fixed capacity buffer | Use dropless routing with `moe_pad_expert_input_to_capacity=False` or set capacity factor `>= 1.25` |
 
 ---
 

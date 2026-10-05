@@ -97,7 +97,7 @@ class DistributedDataParallel(MegatronModule):
             )
 ```
 
-**Memory savings**: Standard DDP uses `All-Reduce`, keeping the full gradient buffer $[2\Phi]$ bytes on every rank. ZeRO-2's `Reduce-Scatter` means Rank $r$ only retains its $\frac{1}{D}$ gradient shard after reduction. Gradient memory scales as $\frac{2\Phi}{D}$.
+**Memory savings**: Standard DDP uses `All-Reduce`, keeping the full gradient buffer `[2Phi]` bytes on every rank. ZeRO-2's `Reduce-Scatter` means Rank r only retains its `(1 / D)` gradient shard after reduction. Gradient memory scales as `(2Phi / D)`.
 
 ---
 
@@ -130,7 +130,7 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
 
 ## 3.5. Global Gradient Clipping Across Shards
 
-Since each rank holds only $\frac{1}{D}$ of the gradients after Reduce-Scatter, the global L2 norm must be computed cooperatively:
+Since each rank holds only `(1 / D)` of the gradients after Reduce-Scatter, the global L2 norm must be computed cooperatively:
 
 ```python
 # megatron/core/optimizer/clip_grads.py
@@ -190,18 +190,18 @@ def _gather_model_params(self, async_op: bool = False):
 
 The 16 bytes/parameter law for full mixed-precision training:
 
-| Component | Standard DDP | ZeRO-2 ($D$ ranks) |
+| Component | Standard DDP | ZeRO-2 (D ranks) |
 |---|---|---|
-| FP16/BF16 Weights | $2\Phi$ bytes | $2\Phi$ bytes |
-| FP16/BF16 Gradients | $2\Phi$ bytes | $\frac{2\Phi}{D}$ bytes |
-| FP32 Master Weights | $4\Phi$ bytes | $\frac{4\Phi}{D}$ bytes |
-| FP32 Adam Momentum | $4\Phi$ bytes | $\frac{4\Phi}{D}$ bytes |
-| FP32 Adam Variance | $4\Phi$ bytes | $\frac{4\Phi}{D}$ bytes |
-| **Total per GPU** | $16\Phi$ bytes | $2\Phi + \frac{14\Phi}{D}$ bytes |
+| FP16/BF16 Weights | 2Phi bytes | 2Phi bytes |
+| FP16/BF16 Gradients | 2Phi bytes | `(2Phi / D)` bytes |
+| FP32 Master Weights | 4Phi bytes | `(4Phi / D)` bytes |
+| FP32 Adam Momentum | 4Phi bytes | `(4Phi / D)` bytes |
+| FP32 Adam Variance | 4Phi bytes | `(4Phi / D)` bytes |
+| **Total per GPU** | 16Phi bytes | `2Phi + (14Phi / D)` bytes |
 
-For a 70B parameter model with $D = 64$ DP ranks:
-- **Standard DDP**: $16 \times 70 \times 10^9 / 10^9 = 1{,}120\text{ GB}$ per GPU ❌
-- **ZeRO-2 (D=64)**: $\approx (2 + 14/64) \times 70 \approx 155\text{ GB}$ per GPU ✅
+For a 70B parameter model with `D = 64` DP ranks:
+- **Standard DDP**: `16 * 70 * 10^9 / 10^9 = 1,120 GB` per GPU ❌
+- **ZeRO-2 (D=64)**: `≈ (2 + 14/64) * 70 ≈ 155 GB` per GPU ✅
 
 ---
 
@@ -211,8 +211,8 @@ For a 70B parameter model with $D = 64$ DP ranks:
 |---|---|---|---|
 | **FP16 Weight Swamping** | Model weights frozen; loss never decreases | Updating FP16 weights directly without FP32 master copy | Always maintain FP32 master weights; cast down only for forward propagation |
 | **Premature Weight All-Gather** | Silent convergence stall or desync across ranks | Ranks execute `dist.all_gather` before local Adam update completes | Ensure `all_gather` is placed strictly after `local_master_weights.addcdiv_()` |
-| **Unpadded Buffer Length Error** | `RuntimeError: Tensors must be equal size` | Total parameter count not evenly divisible by DP world size $D$ | Pad flattened parameter buffers with zeros up to `ceil(Phi / D) * D` elements |
-| **Grad Clipping Norm Inaccuracy** | Exploding gradients despite clip threshold | Clipping gradient norm locally on rank's shard without cluster-wide All-Reduce | Compute $\|g_{\text{local}}\|^2$, run `dist.all_reduce(SUM)`, take square root for global norm |
+| **Unpadded Buffer Length Error** | `RuntimeError: Tensors must be equal size` | Total parameter count not evenly divisible by DP world size D | Pad flattened parameter buffers with zeros up to `ceil(Phi / D) * D` elements |
+| **Grad Clipping Norm Inaccuracy** | Exploding gradients despite clip threshold | Clipping gradient norm locally on rank's shard without cluster-wide All-Reduce | Compute `\|g_local\|^2`, run `dist.all_reduce(SUM)`, take square root for global norm |
 | **Double Weight Decay Application**| Model parameters decay to zero too rapidly | Applying weight decay both in optimizer step and via explicit loss regularization | Use decoupled AdamW weight decay only on FP32 master weights |
 
 ---

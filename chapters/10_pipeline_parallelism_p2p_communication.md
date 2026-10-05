@@ -5,7 +5,7 @@
 
 ## 2.1. Point-to-Point (P2P) Communication & Deadlock Avoidance
 
-Unlike collective operations where all ranks call the function simultaneously, pipeline parallelism uses **Point-to-Point (P2P)** transfers: Stage $k$ sends to Stage $k+1$, and receives gradients from Stage $k+1$.
+Unlike collective operations where all ranks call the function simultaneously, pipeline parallelism uses **Point-to-Point (P2P)** transfers: Stage k sends to Stage `k+1`, and receives gradients from Stage `k+1`.
 
 ### 2.1.1 The Deadlock Trap:
 If Rank 0 and Rank 1 both execute blocking synchronous `dist.send()` simultaneously:
@@ -99,18 +99,18 @@ def p2p_communication(
 
 Let's compute the exact pipeline efficiency for a production-like configuration:
 
-**Config**: $p = 8$ pipeline stages, microbatch global batch split into $m$ microbatches.
+**Config**: `p = 8` pipeline stages, microbatch global batch split into m microbatches.
 
-| $m$ (Microbatches) | Bubble Fraction $\frac{p-1}{m+p-1}$ | GPU Efficiency |
+| m (Microbatches) | Bubble Fraction `((p-1) / (m+p-1))` | GPU Efficiency |
 |---|---|---|
-| 1 | $7/8 = 87.5\%$ | **12.5%** ← Catastrophic |
-| 8 | $7/15 = 46.7\%$ | **53.3%** ← Poor |
-| 16 | $7/23 = 30.4\%$ | **69.6%** ← Mediocre |
-| 32 | $7/39 = 17.9\%$ | **82.1%** ← Decent |
-| 64 | $7/71 = 9.9\%$ | **90.1%** ← Good |
-| 128 | $7/135 = 5.2\%$ | **94.8%** ← Excellent |
+| 1 | `7/8 = 87.5%` | **12.5%** ← Catastrophic |
+| 8 | `7/15 = 46.7%` | **53.3%** ← Poor |
+| 16 | `7/23 = 30.4%` | **69.6%** ← Mediocre |
+| 32 | `7/39 = 17.9%` | **82.1%** ← Decent |
+| 64 | `7/71 = 9.9%` | **90.1%** ← Good |
+| 128 | `7/135 = 5.2%` | **94.8%** ← Excellent |
 
-**Key takeaway**: You need $m \approx 10 \times p$ microbatches to keep the pipeline bubble below $10\%$. In production, typical configurations use $m = 64$ to $m = 256$.
+**Key takeaway**: You need `m ≈ 10 * p` microbatches to keep the pipeline bubble below 10%. In production, typical configurations use `m = 64` to `m = 256`.
 
 ---
 
@@ -120,9 +120,9 @@ Now we can see how **Tensor Parallelism (TP)**, **Pipeline Parallelism (PP)**, a
 
 | Parallelism Dimension | Communication Scope | Frequency | Network Layer | Target Hardware |
 |---|---|---|---|---|
-| **Tensor Parallelism (TP)** | Intra-Layer Matrix Multiplies | High (Every GEMM) | Intra-Node | NVLink / NVSwitch ($>900\text{ GB/s}$) |
-| **Pipeline Parallelism (PP)** | Inter-Layer Boundary Transfers | Medium (Stage Boundaries) | Inter-Node | InfiniBand ($50\text{ GB/s}$) |
-| **Data Parallelism (DP)** | Gradient Synchronization | Low (Once per Step) | Inter-Node | InfiniBand ($50\text{ GB/s}$) |
+| **Tensor Parallelism (TP)** | Intra-Layer Matrix Multiplies | High (Every GEMM) | Intra-Node | NVLink / NVSwitch (`>900 GB/s`) |
+| **Pipeline Parallelism (PP)** | Inter-Layer Boundary Transfers | Medium (Stage Boundaries) | Inter-Node | InfiniBand (`50 GB/s`) |
+| **Data Parallelism (DP)** | Gradient Synchronization | Low (Once per Step) | Inter-Node | InfiniBand (`50 GB/s`) |
 
 ---
 

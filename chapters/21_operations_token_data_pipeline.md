@@ -9,9 +9,9 @@
 
 In distributed pretraining clusters scaling from hundreds to thousands of GPUs, **the data pipeline is often an unexpected and catastrophic throughput bottleneck**:
 1. **Host Memory Thrashing**: Loading multi-terabyte corpora of raw text or JSONL files into Python memory causes immediate Linux Out-Of-Memory (OOM) kills or extensive swapping.
-2. **Network Storage Storms**: If $16{,}384$ GPUs simultaneously issue synchronous read requests to raw text files on a shared network file system (NFS, Lustre, GPFS), metadata servers collapse under millions of IOPS.
+2. **Network Storage Storms**: If `16,384` GPUs simultaneously issue synchronous read requests to raw text files on a shared network file system (NFS, Lustre, GPFS), metadata servers collapse under millions of IOPS.
 3. **Non-Deterministic Multi-Epoch Shuffling**: In standard PyTorch, shuffling a multi-terabyte dataset requires materializing index permutations that exceed host RAM and cannot be deterministically resumed after a cluster crash.
-4. **Padding Inefficiency**: Batches padded to `--seq-length` with pad tokens waste $20\% - 40\%$ of GPU Tensor Core FLOPs on calculating self-attention over meaningless zeros.
+4. **Padding Inefficiency**: Batches padded to `--seq-length` with pad tokens waste `20% - 40%` of GPU Tensor Core FLOPs on calculating self-attention over meaningless zeros.
 
 Megatron Core solves these challenges through **`megatron.core.datasets`**, built upon the high-performance **Binary Indexed Dataset format (`MMapIndexedDataset`)**, **Blended Weighted Datasets**, and **Sequence Packing**.
 
@@ -20,7 +20,7 @@ Megatron Core solves these challenges through **`megatron.core.datasets`**, buil
 ## 2. The Binary Indexed Dataset Format (`.bin` and `.idx`)
 
 Instead of parsing raw JSONL or CSV during training, text is tokenized offline and converted into two paired binary files:
-- **`data.bin`**: A dense, contiguous array of raw token IDs (typically `uint16` for vocabularies $\le 65{,}536$, or `int32` for larger vocabs up to $1\text{M}$ tokens).
+- **`data.bin`**: A dense, contiguous array of raw token IDs (typically `uint16` for vocabularies `<= 65,536`, or `int32` for larger vocabs up to 1M tokens).
 - **`data.idx`**: A compact metadata index recording document boundaries and byte offsets.
 
 ```
@@ -38,11 +38,11 @@ data.bin (Raw Memory-Mapped Token Stream):
   └──────── Document 0 ───────────────┘└─────── Document 1 ───────...
 ```
 
-### 2.1 Constant-Time $O(1)$ Zero-Copy Memory Mapping (`mmap`)
+### 2.1 Constant-Time `O(1)` Zero-Copy Memory Mapping (`mmap`)
 During training:
 - Processes never load the whole `.bin` file into memory. Instead, they call POSIX `mmap()` to map the file into the virtual address space.
 - The Linux kernel page cache transparently pages in only the 4 KB / 2 MB memory pages corresponding to the active microbatch.
-- Millions of random access samples are fetched in **constant $O(1)$ time** with zero memory allocation overhead!
+- Millions of random access samples are fetched in **constant `O(1)` time** with zero memory allocation overhead!
 
 ---
 
@@ -50,19 +50,21 @@ During training:
 
 To guarantee exact reproducibility across node crashes and distributed resumptions, Megatron Core constructs a deterministic **Sample Index Mapping**:
 Given:
-- A sequence length $S$ (e.g. $4{,}096$).
-- An epoch count $E$.
-- Document lengths $\{L_0, L_1, \dots, L_D\}$.
+- A sequence length S (e.g. `4,096`).
+- An epoch count E.
+- Document lengths `\{L_0, L_1, ..., L_D\}`.
 
 Megatron pre-computes an array of sample coordinates:
-$$\text{Sample}_i = (\text{doc\_idx}_i, \text{start\_offset}_i)$$
-When a document finishes mid-sequence, Megatron automatically concatenates the beginning of the next document, separated by an `<|endoftext|>` token, ensuring that **every single sequence fed to the model is exactly $S$ tokens long with zero padding**.
+```text
+Sample_i = (doc\_idx_i, start\_offset_i)
+```
+When a document finishes mid-sequence, Megatron automatically concatenates the beginning of the next document, separated by an `<|endoftext|>` token, ensuring that **every single sequence fed to the model is exactly S tokens long with zero padding**.
 
 ---
 
 ## 4. Blended & Weighted Datasets
 
-Frontier LLMs are trained on mixtures of diverse data sources (e.g., $50\%$ Web Crawl, $20\%$ Code, $15\%$ Academic/ArXiv, $10\%$ Books, $5\%$ Math).
+Frontier LLMs are trained on mixtures of diverse data sources (e.g., 50% Web Crawl, 20% Code, 15% Academic/ArXiv, 10% Books, 5% Math).
 
 Naive mixing requires rewriting and copying petabytes of tokens into a single merged file. 
 Megatron Core's **`BlendedDataset`** combines datasets virtually at the index level:
@@ -70,16 +72,16 @@ Megatron Core's **`BlendedDataset`** combines datasets virtually at the index le
 ```python
 weights = [0.50, 0.20, 0.15, 0.10, 0.05]
 ```
-- Megatron builds a single virtual index mapping where each global sample index $i$ deterministically maps to a sub-dataset index based on a pseudo-random permutation weighted by the specified mixture ratios.
+- Megatron builds a single virtual index mapping where each global sample index i deterministically maps to a sub-dataset index based on a pseudo-random permutation weighted by the specified mixture ratios.
 - **Zero data duplication**: Source `.bin` and `.idx` files remain completely untouched on disk!
 
 ---
 
 ## 5. Sequence Packing (Packing Without Padding)
 
-In instruction fine-tuning (SFT) or multi-turn conversational data, sample lengths vary wildly (e.g., from 50 tokens to 4,000 tokens). Traditional batch padding pads every sequence to the max length, wasting up to $40\%$ of GPU compute on pad tokens.
+In instruction fine-tuning (SFT) or multi-turn conversational data, sample lengths vary wildly (e.g., from 50 tokens to 4,000 tokens). Traditional batch padding pads every sequence to the max length, wasting up to 40% of GPU compute on pad tokens.
 
-**Sequence Packing** (often called *Packing* or *Multi-pack*) packs multiple short sequences into a single continuous sequence of length $S$:
+**Sequence Packing** (often called *Packing* or *Multi-pack*) packs multiple short sequences into a single continuous sequence of length S:
 
 ```
 Padded Batch (Wasteful):
@@ -93,7 +95,9 @@ Cumulative Seqlens (cu_seqlens): [ 0, 3, 8 ]
 
 ### 5.1 FlashAttention with `cu_seqlens`
 To prevent tokens from Sample 0 attending to tokens in Sample 1 within the same packed window, Megatron Core passes an array of cumulative sequence lengths (`cu_seqlens`) directly to FlashAttention / Transformer Engine:
-$$\text{cu\_seqlens} = [0, S_1, S_1 + S_2, \dots, S]$$
+```text
+cu\_seqlens = [0, S_1, S_1 + S_2, ..., S]
+```
 The FlashAttention CUDA kernel uses `cu_seqlens` to reset its softmax accumulators at document boundaries, completely preventing cross-document contamination while achieving **100% arithmetic throughput**!
 
 ---

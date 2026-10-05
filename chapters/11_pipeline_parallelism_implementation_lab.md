@@ -135,17 +135,19 @@ for k in range(num_warmup_microbatches):
     send_backward(input_tensor_grad, config)
 ```
 
-**Memory invariant**: At any point during steady-state, at most $p - 1$ microbatch activations are live in memory simultaneously (where $p$ is the pipeline depth). This is the defining property of 1F1B vs. GPipe's $m$ simultaneous activations.
+**Memory invariant**: At any point during steady-state, at most p - 1 microbatch activations are live in memory simultaneously (where p is the pipeline depth). This is the defining property of 1F1B vs. GPipe's m simultaneous activations.
 
 ---
 
 ### 3.1.3 Pipeline Bubble Fraction
 
-$$\text{Bubble Fraction} = \frac{p - 1}{m + p - 1}$$
+```text
+Bubble Fraction = ((p - 1) / (m + p - 1))
+```
 
-Where $p$ = pipeline stages, $m$ = number of microbatches per global batch.
+Where p = pipeline stages, m = number of microbatches per global batch.
 
-| Microbatches $m$ | Bubble % ($p=8$) | Efficiency |
+| Microbatches m | Bubble % (`p=8`) | Efficiency |
 |---|---|---|
 | 8 | 46.7% | 53.3% |
 | 16 | 31.8% | 68.2% |
@@ -154,8 +156,10 @@ Where $p$ = pipeline stages, $m$ = number of microbatches per global batch.
 | 128 | 5.4% | 94.6% |
 
 Megatron-Core's interleaved 1F1B schedule (`num_model_chunks > 1`) reduces the bubble to:
-$$\text{Bubble Fraction (Interleaved)} = \frac{1}{m} \cdot \frac{p-1}{V}$$
-where $V$ is the number of virtual pipeline stages per physical rank.
+```text
+Bubble Fraction (Interleaved) = (1 / m) * ((p-1) / V)
+```
+where V is the number of virtual pipeline stages per physical rank.
 
 ---
 
@@ -164,10 +168,10 @@ where $V$ is the number of virtual pipeline stages per physical rank.
 | Bug / Pitfall | Physical Symptom | Underlying Root Cause | Battle-Tested Fix |
 |---|---|---|---|
 | **Blocking P2P Deadlock** | Cluster freezes permanently on step 0 | Two adjacent ranks simultaneously calling synchronous `dist.send()` to each other | Always post receives before sends, or use `dist.batch_isend_irecv()` |
-| **Warmup OOM Spike** | Stage 0 crashes with OOM during warmup | Attempting GPipe schedule with $m=64$, keeping 64 forward activations alive | Use 1F1B schedule to cap in-flight microbatches to $\le p$ |
-| **Layer Imbalance Stalls** | High bubble overhead despite high $m$ | Stage 0 holding Embedding Table + 8 layers, while middle stages hold 8 layers | Allocate 1 fewer layer to Stage 0 and Stage $p-1$ to account for embedding and LM head FLOPs |
+| **Warmup OOM Spike** | Stage 0 crashes with OOM during warmup | Attempting GPipe schedule with `m=64`, keeping 64 forward activations alive | Use 1F1B schedule to cap in-flight microbatches to `<= p` |
+| **Layer Imbalance Stalls** | High bubble overhead despite high m | Stage 0 holding Embedding Table + 8 layers, while middle stages hold 8 layers | Allocate 1 fewer layer to Stage 0 and Stage p-1 to account for embedding and LM head FLOPs |
 | **Non-Contiguous Activation Slice**| `RuntimeError: P2P op requires contiguous tensor` | Passing a sliced activation tensor directly into `isend` | Call `tensor.contiguous()` before passing to `dist.P2POp` |
-| **Rank-to-Stage Misalignment** | Activations sent to the wrong physical node | Assuming rank 1 is always stage 1 in 3D parallelism ($TP \times PP \times DP$) | Compute stage index via `get_pipeline_model_parallel_rank()` from `megatron.core.parallel_state` |
+| **Rank-to-Stage Misalignment** | Activations sent to the wrong physical node | Assuming rank 1 is always stage 1 in 3D parallelism (`TP * PP * DP`) | Compute stage index via `get_pipeline_model_parallel_rank()` from `megatron.core.parallel_state` |
 
 ---
 

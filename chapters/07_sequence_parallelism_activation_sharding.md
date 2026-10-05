@@ -7,7 +7,7 @@
 
 ## 1.1. Activation Memory Scaling Limits in Pure Tensor-Parallel Transformers
 
-In pure Tensor Parallelism (TP), the weights and intermediate GEMM activations of the **Attention** and **MLP** blocks are partitioned across $N$ GPUs.
+In pure Tensor Parallelism (TP), the weights and intermediate GEMM activations of the **Attention** and **MLP** blocks are partitioned across N GPUs.
 
 However, consider the components of a Transformer block outside of Attention and MLP:
 - **LayerNorm 1 & LayerNorm 2**
@@ -41,14 +41,14 @@ However, consider the components of a Transformer block outside of Attention and
 ```
 
 ### 1.1.1 The Math of Replicated Activations: Where Does Memory Go?
-For a Transformer model with hidden size $H$, sequence length $S$, batch size $B$, and $L$ layers:
-- Each LayerNorm must store its normalized input for backpropagation: $2 \times (B \times S \times H)$ elements.
-- Each Dropout requires an activation bitmask: $(B \times S \times H)$ bytes.
-- Residual connections must store their inputs to compute gradient additions: $(B \times S \times H)$ elements.
+For a Transformer model with hidden size H, sequence length S, batch size B, and L layers:
+- Each LayerNorm must store its normalized input for backpropagation: `2 * (B * S * H)` elements.
+- Each Dropout requires an activation bitmask: `(B * S * H)` bytes.
+- Residual connections must store their inputs to compute gradient additions: `(B * S * H)` elements.
 
-Even with $\text{TP} = 8$, **none of this memory was sharded in Megatron v1/v2**. Every single GPU stored the exact same full $(B \times S \times H)$ activation tensors!
+Even with `TP = 8`, **none of this memory was sharded in Megatron v1/v2**. Every single GPU stored the exact same full `(B * S * H)` activation tensors!
 
-As sequence length $S$ grew from $1{,}024$ to $4{,}096$ and beyond, activation memory exploded to over **$75\%$ of total GPU VRAM**, forcing practitioners to use slow, brute-force activation recomputation (checkpointing) which wasted $>30\%$ of total GPU compute time.
+As sequence length S grew from `1,024` to `4,096` and beyond, activation memory exploded to over **75% of total GPU VRAM**, forcing practitioners to use slow, brute-force activation recomputation (checkpointing) which wasted >30% of total GPU compute time.
 
 ---
 
@@ -56,22 +56,26 @@ As sequence length $S$ grew from $1{,}024$ to $4{,}096$ and beyond, activation m
 
 Korthikanti et al. (2022) noticed an elegant algebraic equivalence in collective communications:
 
-$$\mathbf{\text{All-Reduce}}(X) \equiv \mathbf{\text{All-Gather}}\Big(\mathbf{\text{Reduce-Scatter}}(X)\Big)$$
+```text
+All-Reduce(X) == All-Gather(Reduce-Scatter(X))
+```
 
 Recall from [Distributed Foundations & Interconnects](/foundations/) that Ring All-Reduce is physically executed in two successive phases:
-1. **Scatter-Reduce**: Takes full tensors from all ranks, sums them, and leaves rank $i$ holding a reduced $\frac{1}{N}$-th shard.
+1. **Scatter-Reduce**: Takes full tensors from all ranks, sums them, and leaves rank i holding a reduced `(1 / N)`-th shard.
 2. **All-Gather**: Collects the reduced shards from all ranks and concatenates them back into a full tensor.
 
-In pure Tensor Parallelism ([1D Tensor Parallelism](/tensor-parallelism/)), immediately after `RowParallelLinear`, we executed an All-Reduce to reconstruct the full $[B, S, H]$ tensor for LayerNorm.
+In pure Tensor Parallelism ([1D Tensor Parallelism](/tensor-parallelism/)), immediately after `RowParallelLinear`, we executed an All-Reduce to reconstruct the full `[B, S, H]` tensor for LayerNorm.
 
 **Megatron Sequence Parallelism asks a foundational question:**
-> *Why reconstruct the full sequence $[B, S, H]$ before LayerNorm?*
-> LayerNorm, Dropout, and Residual Additions are **completely independent across the sequence dimension $S$!*
+> *Why reconstruct the full sequence `[B, S, H]` before LayerNorm?*
+> LayerNorm, Dropout, and Residual Additions are **completely independent across the sequence dimension S!*
 
-$$\text{LayerNorm}(x_{1..S}) = \Big[\text{LayerNorm}(x_1), \text{LayerNorm}(x_2), \dots, \text{LayerNorm}(x_S)\Big]$$
+```text
+LayerNorm(x_{1..S}) = [LayerNorm(x_1), LayerNorm(x_2), ..., LayerNorm(x_S)]
+```
 
-Because LayerNorm computes the mean and variance across the **hidden dimension $H$ for each token individually**, **tokens at different sequence positions never communicate with each other!**
-Whether a GPU holds $S$ tokens or $\frac{S}{N}$ tokens, the LayerNorm output for each token is mathematically identical.
+Because LayerNorm computes the mean and variance across the **hidden dimension H for each token individually**, **tokens at different sequence positions never communicate with each other!**
+Whether a GPU holds S tokens or `(S / N)` tokens, the LayerNorm output for each token is mathematically identical.
 
 ---
 
@@ -79,11 +83,11 @@ Whether a GPU holds $S$ tokens or $\frac{S}{N}$ tokens, the LayerNorm output for
 
 Instead of executing an All-Reduce at the end of Attention and an All-Reduce at the end of MLP, Sequence Parallelism **splits the All-Reduce across the layers**:
 
-1. At the end of `RowParallelLinear`, we execute a **`Reduce-Scatter`** along the sequence dimension $S$.
-   - Output shape on each GPU: $\left[B, \frac{S}{N}, H\right]$
-2. **LayerNorm, Dropout, and Residual additions** run on sequence shards of size $\frac{S}{N}$!
-   - Activation memory on each GPU drops by a factor of $N$!
-3. Before entering the next `ColumnParallelLinear`, we execute an **`All-Gather`** along the sequence dimension to reconstruct the full $[B, S, H]$ sequence for the GEMM.
+1. At the end of `RowParallelLinear`, we execute a **`Reduce-Scatter`** along the sequence dimension S.
+   - Output shape on each GPU: `[B, (S / N), H]`
+2. **LayerNorm, Dropout, and Residual additions** run on sequence shards of size `(S / N)`!
+   - Activation memory on each GPU drops by a factor of N!
+3. Before entering the next `ColumnParallelLinear`, we execute an **`All-Gather`** along the sequence dimension to reconstruct the full `[B, S, H]` sequence for the GEMM.
 
 ```
                    Sequence Parallel Transformer Block
@@ -133,34 +137,48 @@ Instead of executing an All-Reduce at the end of Attention and an All-Reduce at 
 
 Does Sequence Parallelism add communication latency? **Mathematically, no!**
 
-Let $M = B \times S \times H$ be the total tensor volume in bytes, and $N$ be the Tensor Parallel size.
+Let `M = B * S * H` be the total tensor volume in bytes, and N be the Tensor Parallel size.
 
 ### 1.4.1 Communication in Pure Tensor Parallelism:
 Each block performs 2 All-Reduces in the forward pass.
 Recall from [Distributed Foundations & Interconnects](/foundations/) that the communication volume of a Ring All-Reduce is:
-$$\text{Vol}_{\text{All-Reduce}} = 2 \left(\frac{N - 1}{N}\right) M$$
+```text
+Vol_All-Reduce = 2 (((N - 1) / N)) M
+```
 
-$$\text{Total Forward Comm}_{\text{TP}} = 2 \times \left[ 2 \left(\frac{N - 1}{N}\right) M \right] = \mathbf{4 \left(\frac{N - 1}{N}\right) M}$$
+```text
+Total Forward Comm_TP = 2 * [ 2 (((N - 1) / N)) M ] = 4 (((N - 1) / N)) M
+```
 
 ---
 
 ### 1.4.2 Communication in Tensor Parallelism + Sequence Parallelism:
 In Sequence Parallelism, each block replaces:
-- 1 All-Reduce $\longrightarrow$ 1 Reduce-Scatter + 1 All-Gather
+- 1 All-Reduce `\longrightarrow` 1 Reduce-Scatter + 1 All-Gather
 
 Recall from [Distributed Foundations & Interconnects](/foundations/):
-$$\text{Vol}_{\text{Reduce-Scatter}} = \left(\frac{N - 1}{N}\right) M$$
-$$\text{Vol}_{\text{All-Gather}} = \left(\frac{N - 1}{N}\right) M$$
+```text
+Vol_Reduce-Scatter = (((N - 1) / N)) M
+```
+```text
+Vol_All-Gather = (((N - 1) / N)) M
+```
 
 Summing both operations:
-$$\text{Vol}_{\text{Reduce-Scatter}} + \text{Vol}_{\text{All-Gather}} = \left(\frac{N - 1}{N}\right) M + \left(\frac{N - 1}{N}\right) M = 2 \left(\frac{N - 1}{N}\right) M$$
+```text
+Vol_Reduce-Scatter + Vol_All-Gather = (((N - 1) / N)) M + (((N - 1) / N)) M = 2 (((N - 1) / N)) M
+```
 
-$$\text{Total Forward Comm}_{\text{TP+SP}} = 2 \times \left[ 2 \left(\frac{N - 1}{N}\right) M \right] = \mathbf{4 \left(\frac{N - 1}{N}\right) M}$$
+```text
+Total Forward Comm_{TP+SP} = 2 * [ 2 (((N - 1) / N)) M ] = 4 (((N - 1) / N)) M
+```
 
 ### 1.4.3 The Fundamental Equivalence Theorem:
-$$\mathbf{\text{Comm Volume}}(\text{TP}) \equiv \mathbf{\text{Comm Volume}}(\text{TP} + \text{SP})$$
+```text
+Comm Volume(TP) == Comm Volume(TP + SP)
+```
 
-Sequence Parallelism introduces **EXACTLY ZERO additional communication bytes**, while slashing activation memory for all non-tensor-parallel layers by a factor of $N$!
+Sequence Parallelism introduces **EXACTLY ZERO additional communication bytes**, while slashing activation memory for all non-tensor-parallel layers by a factor of N!
 
 ---
 
@@ -169,57 +187,67 @@ Sequence Parallelism introduces **EXACTLY ZERO additional communication bytes**,
 To quantify the breakthrough, let us examine the exact analytic equations derived by Korthikanti et al. for the activation memory per Transformer layer (in bytes, assuming 16-bit precision where each element is 2 bytes).
 
 Let:
-- $S$: Sequence length
-- $B$: Batch size
-- $H$: Hidden dimension
-- $a$: Number of attention heads
-- $N$: Tensor Parallel size
+- S: Sequence length
+- B: Batch size
+- H: Hidden dimension
+- a: Number of attention heads
+- N: Tensor Parallel size
 
 ### 1.5.1 Standard Transformer (Single GPU, No Parallelism)
-$$\text{Mem}_{\text{standard}} = S \cdot B \cdot H \cdot \left(34 + 5 \cdot \frac{a \cdot S}{H}\right) \text{ bytes}$$
+```text
+Mem_standard = S * B * H * (34 + 5 * ((a * S) / H)) bytes
+```
 
 Where:
-- $34 \cdot S \cdot B \cdot H$ comes from GEMMs, LayerNorms, Dropouts, and Residuals.
-- $5 \cdot \frac{a \cdot S^2 \cdot B}{H}$ comes from the quadratic attention matrices ($Q K^T$ scores, softmax probabilities, and attention dropout).
+- `34 * S * B * H` comes from GEMMs, LayerNorms, Dropouts, and Residuals.
+- `5 * ((a * S^2 * B) / H)` comes from the quadratic attention matrices (`Q K^T` scores, softmax probabilities, and attention dropout).
 
 ---
 
 ### 1.5.2 Tensor Parallelism Alone (Megatron-LM v1 & v2)
-$$\text{Mem}_{\text{TP}} = S \cdot B \cdot H \cdot \left(\mathbf{10} + \frac{24}{N} + 5 \cdot \frac{a \cdot S}{N \cdot H}\right) \text{ bytes}$$
+```text
+Mem_TP = S * B * H * (10 + (24 / N) + 5 * ((a * S) / (N * H))) bytes
+```
 
-Notice that the **$10 \cdot S \cdot B \cdot H$ term is NOT divided by $N$!**
-- The $10 \cdot S \cdot B \cdot H$ corresponds to the two LayerNorms ($2 \times 2 = 4$), two Dropouts ($2 \times 2 = 4$), and Residual additions ($2$).
-- Even with $N = 8$, this constant non-sharded memory term dominates, choking the GPU at sequence lengths $S \ge 4{,}096$.
+Notice that the **`10 * S * B * H` term is NOT divided by N!**
+- The `10 * S * B * H` corresponds to the two LayerNorms (`2 * 2 = 4`), two Dropouts (`2 * 2 = 4`), and Residual additions (2).
+- Even with `N = 8`, this constant non-sharded memory term dominates, choking the GPU at sequence lengths `S >= 4,096`.
 
 ---
 
 ### 1.5.3 Tensor Parallelism + Sequence Parallelism (Megatron-LM v3)
-$$\text{Mem}_{\text{TP+SP}} = S \cdot B \cdot H \cdot \left(\frac{\mathbf{34}}{N} + 5 \cdot \frac{a \cdot S}{N \cdot H}\right) \text{ bytes}$$
+```text
+Mem_{TP+SP} = S * B * H * ((34 / N) + 5 * ((a * S) / (N * H))) bytes
+```
 
-**Every single linear term is now divided by $N$!**
-The non-sharded $10 \cdot S \cdot B \cdot H$ barrier is completely demolished.
+**Every single linear term is now divided by N!**
+The non-sharded `10 * S * B * H` barrier is completely demolished.
 
 ---
 
 ### 1.5.4 Selective Activation Recomputation: Eliminating the Quadratic Term
 Look at the remaining term:
-$$5 \cdot \frac{a \cdot S^2 \cdot B}{N} \text{ bytes}$$
-This term scales **quadratically with sequence length $S^2$**. At $S = 32{,}768$ or $128{,}000$, this quadratic term overwhelms all GPU memory, regardless of $N$.
+```text
+5 * ((a * S^2 * B) / N) bytes
+```
+This term scales **quadratically with sequence length `S^2`**. At `S = 32,768` or `128,000`, this quadratic term overwhelms all GPU memory, regardless of N.
 
 ### 1.5.5 The Selective Recomputation Insight:
 Korthikanti et al. asked: *What creates this quadratic term?*
-- The attention score matrix: $Q K^T$ ($B \cdot a \cdot S^2$)
-- The softmax probabilities ($B \cdot a \cdot S^2$)
-- The attention dropout mask ($B \cdot a \cdot S^2$)
+- The attention score matrix: `Q K^T` (`B * a * S^2`)
+- The softmax probabilities (`B * a * S^2`)
+- The attention dropout mask (`B * a * S^2`)
 
 These operations require **tiny compute FLOPs** (they are cheap elementwise exponential and multiplication operations), but consume **gigantic memory**!
-Conversely, the QKV projections and MLP projections require **huge compute FLOPs ($95\%$ of all step FLOPs)**, but produce relatively small activations $\mathcal{O}(S \cdot H)$.
+Conversely, the QKV projections and MLP projections require **huge compute FLOPs (95% of all step FLOPs)**, but produce relatively small activations `O(S * H)`.
 
 > **The Selective Recomputation Rule**:
 > Store the inputs to the expensive GEMMs. Discard ONLY the cheap quadratic attention operations (Softmax, Attention Dropout), and recompute them on-the-fly during backpropagation!
 
 When using **TP + SP + Selective Recomputation**, the quadratic term is completely removed:
-$$\text{Mem}_{\text{TP+SP+Selective}} = \mathbf{\frac{34}{N} \cdot S \cdot B \cdot H \text{ bytes}}$$
+```text
+Mem_{TP+SP+Selective} = (34 / N) * S * B * H bytes
+```
 
 ```
 Activation Memory for a 70B Model at Sequence Length 8,192:
@@ -244,16 +272,16 @@ A frequent architectural question in long-context training is: *Why not offload 
 ```
 
 1. **The PCIe I/O Bottleneck**:
-   - Modern HBM3 memory bandwidth is $3.35\text{ TB/s}$.
-   - PCIe Gen 5 $\times 16$ interconnect bandwidth is only $64\text{ GB/s}$ ($\mathbf{\approx 52\times\text{ slower}}$).
-   - Offloading an activation tensor to host CPU memory and reading it back during the backward pass introduces immense latency. The GPU's Tensor Cores spend up to $60\%$ of their time stalled waiting for DMA memory transfers.
+   - Modern HBM3 memory bandwidth is `3.35 TB/s`.
+   - PCIe Gen 5 `* 16` interconnect bandwidth is only `64 GB/s` (`≈ 52 * slower`).
+   - Offloading an activation tensor to host CPU memory and reading it back during the backward pass introduces immense latency. The GPU's Tensor Cores spend up to 60% of their time stalled waiting for DMA memory transfers.
 2. **The Selective Recomputation Victory**:
-   - Because modern Tensor Cores deliver nearly $1{,}000\text{ TFLOPS}$ of compute throughput, re-executing cheap elementwise attention operations (Softmax, Dropout) takes a few microseconds—vastly faster than shipping tensors across the PCIe bus!
-   - Selective Recomputation is compute-optimal and memory-optimal for sequence lengths up to $64\text{k}$.
+   - Because modern Tensor Cores deliver nearly `1,000 TFLOPS` of compute throughput, re-executing cheap elementwise attention operations (Softmax, Dropout) takes a few microseconds—vastly faster than shipping tensors across the PCIe bus!
+   - Selective Recomputation is compute-optimal and memory-optimal for sequence lengths up to 64k.
 
 > [!NOTE]
 > **Why This Matters**:
-> In LLM pretraining, never use CPU activation offloading unless you have zero other options. Selective Activation Recomputation delivers the exact same memory relief with zero I/O transfer latency and $<3\%$ compute overhead.
+> In LLM pretraining, never use CPU activation offloading unless you have zero other options. Selective Activation Recomputation delivers the exact same memory relief with zero I/O transfer latency and <3% compute overhead.
 
 ---
 
@@ -294,7 +322,7 @@ class SelectiveRecomputeAttention(torch.nn.Module):
             Q, K, V, scale, dropout_p,
             use_reentrant=False,
         )
-
+```
 
 ```python
 # In Megatron Core, selective recomputation is enabled declaratively:
@@ -313,12 +341,12 @@ config = TransformerConfig(
 
 1. **`_attention_core` Isolation**:
    - Implements the pure quadratic attention operations: `scores = torch.matmul(Q, K^T) * scale`, followed by `softmax` and optional `dropout`.
-   - In standard backprop, the entire $[B, h, S, S]$ probability matrix must be saved in GPU memory to compute $\frac{\partial \mathcal{L}}{\partial \text{scores}} = P \odot (\frac{\partial \mathcal{L}}{\partial P} - \sum P \odot \frac{\partial \mathcal{L}}{\partial P})$.
+   - In standard backprop, the entire `[B, h, S, S]` probability matrix must be saved in GPU memory to compute `(d Loss / d scores) = P ⊙ ((d Loss / d P) - sum P ⊙ (d Loss / d P))`.
    - By isolating this function into an isolated sub-graph, we can checkpoint it independently from the linear GEMMs.
 2. **`checkpoint.checkpoint(..., use_reentrant=False)`**:
-   - PyTorch evaluates `_attention_core` in the forward pass, outputs the attended values $O = P \cdot V$, but **does NOT save the internal $P$ tensor to autograd's activation tape**.
-   - Instead, only the inputs $(Q, K, V)$ are saved. Because $(Q, K, V)$ each have size $B \times S \times H$, their combined storage is $\mathcal{O}(S \cdot H)$—vastly smaller than the $\mathcal{O}(S^2)$ attention matrix.
-   - During backward propagation, PyTorch re-executes `_attention_core` on-the-fly using the stashed $(Q, K, V)$, computes the attention probabilities, executes backprop through them, and instantly discards them from memory.
+   - PyTorch evaluates `_attention_core` in the forward pass, outputs the attended values `O = P * V`, but **does NOT save the internal P tensor to autograd's activation tape**.
+   - Instead, only the inputs `(Q, K, V)` are saved. Because `(Q, K, V)` each have size `B * S * H`, their combined storage is `O(S * H)`—vastly smaller than the `O(S^2)` attention matrix.
+   - During backward propagation, PyTorch re-executes `_attention_core` on-the-fly using the stashed `(Q, K, V)`, computes the attention probabilities, executes backprop through them, and instantly discards them from memory.
 
 ---
 

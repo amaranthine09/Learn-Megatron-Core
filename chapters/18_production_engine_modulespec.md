@@ -132,9 +132,11 @@ This declarative decoupling is what makes Megatron Core radically superior to le
 ## 1.3. Communication-Computation Overlap (Comm-Compute Overlap)
 
 In Books 2 and 3, we treated computation and communication as sequential steps:
-$$\text{Time}_{\text{block}} = \text{Time}_{\text{GEMM}} + \text{Time}_{\text{All-Reduce}}$$
+```text
+Time_block = Time_GEMM + Time_All-Reduce
+```
 
-Even with high-speed NVLink, communication takes $15 - 25\%$ of each step's time.
+Even with high-speed NVLink, communication takes `15 - 25%` of each step's time.
 
 ### 1.3.1 The M-Core Solution: Micro-Tiling GEMMs
 In Megatron Core, large GEMMs are split along the sequence or batch dimension into **independent tiles**:
@@ -160,7 +162,7 @@ In Megatron Core, large GEMMs are split along the sequence or batch dimension in
 3. Simultaneously, Stream 0 starts computing **GEMM Tile 1**!
 4. By the time GEMM Tile 1 finishes, Tile 0's communication is already done!
 
-**Observable Result**: Communication latency is almost completely hidden behind computation, achieving **$>90\%$ of theoretical peak GPU throughput (MFU)**!
+**Observable Result**: Communication latency is almost completely hidden behind computation, achieving **>90% of theoretical peak GPU throughput (MFU)**!
 
 ```python
 from megatron.core.transformer.transformer_config import TransformerConfig
